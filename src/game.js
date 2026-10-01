@@ -119,18 +119,16 @@ const POWER_RATES = [
 
 // ---- Game modes ----
 // Every mode has ONE marked player (this.it). What differs is what the others want to do about it:
-//   tag  : the marked player is IT. Run away; whoever is IT at zero loses.
 //   bomb : the marked player carries the bomb. RUN AWAY from it; at zero it explodes and the carrier + anyone within BLAST_R lose.
 //   flag : the marked player holds the flag. CATCH them (touch to steal it); whoever holds it at zero wins the round.
-// To rename a mode, change `name` (and `tag`, the little label above the marked player). Set BLAST_R = 0 for a bomb that only hurts its carrier.
+// The host picks a mode on the CHOOSE MODE screen (index.html, #scrMode). To rename a mode, change `name` here and the card caption there.
+// Set BLAST_R = 0 for a bomb that only hurts its carrier.
 const BLAST_R = 160;
 const MODES = [
-  { id: 'tag',  name: 'CLASSIC TAG', tag: 'IT',   hex: '#ffffff', col: 0xffffff, icon: 'tri',  dy: 32, ty: 50, gr: 30,
-    blurb: 'Whoever is IT when time runs out loses.' },
-  { id: 'bomb', name: 'BOMB PANIC',  tag: 'BOMB', hex: '#ff6b5e', col: 0xff3d2e, icon: 'bomb', dy: 40, ty: 62, gr: 40,
+  { id: 'bomb', name: 'BOMB PANIC',  hex: '#ff6b5e', col: 0xff3d2e, icon: 'bomb', dy: 40,
     goal: 'RUN from the bomb!', other: 'RUN FROM THE BOMB!', carry: 'PASS THE BOMB ON!',
     blurb: 'One player carries the bomb. Touch someone to pass it on. At zero it blows up: the carrier and anyone close by lose.' },
-  { id: 'flag', name: 'FLAG HUNT',   tag: 'FLAG', hex: '#5dff9a', col: 0x2ee66b, icon: 'flag', dy: 42, ty: 64, gr: 36,
+  { id: 'flag', name: 'FLAG HUNT',   hex: '#5dff9a', col: 0x2ee66b, icon: 'flag', dy: 42,
     goal: 'CATCH the flag holder!', other: 'CATCH THE FLAG!', carry: 'KEEP THE FLAG - RUN!',
     blurb: 'One player holds the flag. Everyone else chases them and touches to steal it. Hold it at zero to win the round.' }];
 const MODE = () => MODES[G.mode] || MODES[0];
@@ -841,7 +839,7 @@ function makeModeTextures(s) {
  * ===================================================================== */
 class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
-  create() { if (!this.textures.exists('tri')) this.makeTextures(); }   // textures survive a return to the main menu
+  create() { if (!this.textures.exists('p0')) this.makeTextures(); }   // textures survive a return to the main menu
 
   /** Draws a cat-like character for each of the 12 colours into textures 'p0'..'p11'. */
   makeTextures() {
@@ -854,8 +852,6 @@ class MenuScene extends Phaser.Scene {
       g.fillStyle(0x000000).fillCircle(13, 25, 2).fillCircle(25, 25, 2);
       g.generateTexture('p' + i, 36, 36); g.destroy();
     });
-    const t = this.add.graphics(); t.fillStyle(0x1c2b38).fillTriangle(0, 0, 26, 0, 13, 15).fillStyle(0xffffff).fillTriangle(4, 3, 22, 3, 13, 11);   // IT marker: white arrow, dark rim
-    t.generateTexture('tri', 26, 15); t.destroy();
     const e = this.add.graphics(); e.fillStyle(0xffe082).fillTriangle(0, 12, 10, 0, 20, 12);      // jump-pad arrow
     e.generateTexture('arrow', 20, 12); e.destroy();
     const c = this.add.graphics(); c.fillStyle(0xffffff)                                          // cloud
@@ -880,7 +876,7 @@ function startRound() {
 }
 
 /* =====================================================================
- * Menu UI: HTML screens (home, map, settings, join, lobby) + host / join logic
+ * Menu UI: HTML screens (home, mode, map, settings, join, lobby) + host / join logic
  * ===================================================================== */
 const $ = id => document.getElementById(id);
 const TIMES = [10, 20, 30, 45, 60, 90, 120, 180, 240, 300];       // selectable round lengths (s)
@@ -893,13 +889,12 @@ function show(id) {
 
 function paintSettings() {
   $('vPlayers').textContent = G.cap; $('vTime').textContent = G.round + 's'; $('vPower').textContent = POWER_NAMES[G.power];
-  $('vMode').textContent = MODE().name; $('modeNote').textContent = MODE().blurb; $('mapNote').textContent = 'Mode: ' + MODE().name;
-  const at = { mode: [G.mode, 0, MODES.length - 1], players: [G.cap, 2, 12], time: [TIMES.indexOf(G.round), 0, TIMES.length - 1], power: [G.power, 0, POWER_NAMES.length - 1] };
+  $('mapNote').textContent = 'Mode: ' + MODE().name;
+  const at = { players: [G.cap, 2, 12], time: [TIMES.indexOf(G.round), 0, TIMES.length - 1], power: [G.power, 0, POWER_NAMES.length - 1] };
   document.querySelectorAll('.step').forEach(b => { const [v, lo, hi] = at[b.dataset.set]; b.disabled = +b.dataset.d < 0 ? v <= lo : v >= hi; });
 }
 function stepSetting(k, d) {
-  if (k === 'mode') G.mode = clamp(G.mode + d, 0, MODES.length - 1);
-  else if (k === 'players') G.cap = clamp(G.cap + d, 2, 12);
+  if (k === 'players') G.cap = clamp(G.cap + d, 2, 12);
   else if (k === 'time') G.round = TIMES[clamp(TIMES.indexOf(G.round) + d, 0, TIMES.length - 1)];
   else G.power = clamp(G.power + d, 0, POWER_NAMES.length - 1);
   paintSettings();
@@ -976,9 +971,11 @@ function toMainMenu() {
 }
 
 function initUI() {
-  $('hostBtn').onclick = () => show('scrMap');
+  $('hostBtn').onclick = () => show('scrMode');
+  document.querySelectorAll('[data-modeid]').forEach(b => { b.onclick = () => {              // CHOOSE MODE card -> remember it, go on to the map
+    G.mode = Math.max(0, MODES.findIndex(m => m.id === b.dataset.modeid)); paintSettings(); show('scrMap'); }; });
   $('joinBtn').onclick = () => { $('joinMsg').textContent = ''; show('scrJoin'); };
-  document.querySelectorAll('.island').forEach(b => { b.onclick = () => hostRoom(b.dataset.map); });
+  document.querySelectorAll('.island[data-map]').forEach(b => { b.onclick = () => hostRoom(b.dataset.map); });
   $('settingsBtn').onclick = () => { paintSettings(); show('scrSettings'); };
   document.querySelectorAll('.step').forEach(b => { b.onclick = () => stepSetting(b.dataset.set, +b.dataset.d); });
   document.querySelectorAll('.back').forEach(b => { b.onclick = () => (b.dataset.back === 'leave' ? leaveRoom() : show(b.dataset.back)); });
@@ -1006,7 +1003,7 @@ class PlayScene extends Phaser.Scene {
   create() {
     drawBg(this); drawLevel(this);
     this.host = G.isHost; if (!this.host) G.snap = null; this.sinceSnap = 0; this.timeLeft = G.round;   // (G.remote is cleared when the round starts, see startRound / onHostMsg)
-    this.M = MODE(); this.lastIt = -1; this.roleKey = ''; this.vk = 0; this.timerCol = '#fff';
+    this.M = MODE(); this.roleKey = ''; this.vk = 0; this.timerCol = '#fff';
     this.it = Phaser.Math.Between(0, G.maxP - 1); this.cdUntil = 0; this.over = false;
     this.pu = []; this.puId = 0; this.spawnAt = this.time.now + POWER_RATES[G.power].first; this.pus = {}; this.sp = []; this.su = [];   // orbs (host), orb sprites, per-player [power, fx]
     this.ec = 0; this.lastSendT = 0; this.lastMe = ''; this.lastRules = ''; this.effT = 0; this.hudShow = -1; this.pwLock = 0; this.pwSpent = false;
@@ -1053,20 +1050,12 @@ class PlayScene extends Phaser.Scene {
       return p.body.velocity.y >= 0 && p.body.prev.y + p.body.height <= z.body.top + 4;
     });
 
-    // Marker over the marked player: glow + icon + label. Classic = white "IT" triangle; bomb = red bomb; flag = green flag.
+    // Marker over the marked player: just the icon (bomb or flag). No circles around the player, no text label.
+    // BOMB = a flickering fuse spark + red screen edges when the bomb is close.   FLAG = a waving flag + soft green screen edges as you get near.
     const M = this.M;
-    this.glow = this.add.circle(0, 0, M.gr, M.col, .35).setDepth(4);
-    this.tri = this.add.image(0, 0, M.icon).setDepth(6);
-    this.itTxt = this.add.text(0, 0, M.tag, { ...this.font(18), color: M.hex }).setOrigin(.5).setDepth(6);
-    if (M.id !== 'tag') {
-      // BOMB = red "keep away": a fixed blast-radius zone, waves pushing outward, a flickering fuse spark, red screen edges when the bomb is close.
-      // FLAG = green "come get it": rings closing in on the holder, a waving flag, soft green screen edges as you get near.
-      this.zoneFill = this.add.circle(0, 0, BLAST_R, M.col, .1).setDepth(3).setVisible(M.id === 'bomb');
-      this.zone = this.add.image(0, 0, 'ring').setTint(M.col).setDepth(3.5).setVisible(M.id === 'bomb');
-      this.pulse = [0, 1].map(() => this.add.image(0, 0, 'ring').setTint(M.col).setDepth(3.6).setAlpha(0));
-      this.spark = this.add.image(0, 0, 'mote').setTint(0xffd54f).setDepth(6.5).setVisible(M.id === 'bomb');
-      this.vig = this.add.image(W / 2, H / 2, 'vig').setDisplaySize(W, H).setTint(M.col).setDepth(9).setAlpha(0);
-    }
+    this.mark = this.add.image(0, 0, M.icon).setDepth(6);
+    this.spark = this.add.image(0, 0, 'mote').setTint(0xffd54f).setDepth(6.5).setVisible(M.id === 'bomb');
+    this.vig = this.add.image(W / 2, H / 2, 'vig').setDisplaySize(W, H).setTint(M.col).setDepth(9).setAlpha(0);
 
     // HUD
     const hud = [];
@@ -1087,12 +1076,10 @@ class PlayScene extends Phaser.Scene {
     this.hudBar = this.add.graphics().setDepth(12);
     this.msg = this.add.text(W / 2, 130, '', this.font(46)).setOrigin(.5).setDepth(10);
     hud.push(this.hudIcon, this.hudEmpty, this.hudName, this.hudKey, this.hudBar, this.msg);
-    if (M.id !== 'tag') {
-      this.role = this.add.text(W / 2, 98, '', this.font(26)).setOrigin(.5).setDepth(10); hud.push(this.role);     // what YOU should be doing right now
-      const t1 = this.add.text(W / 2, 300, M.name, { ...this.font(84), color: M.hex }).setOrigin(.5).setDepth(12);   // round intro, fades out
-      const t2 = this.add.text(W / 2, 374, M.goal, this.font(36)).setOrigin(.5).setDepth(12);
-      this.tweens.add({ targets: [t1, t2], alpha: 0, delay: 2200, duration: 600, onComplete: () => { t1.destroy(); t2.destroy(); } });
-    }
+    this.role = this.add.text(W / 2, 98, '', this.font(26)).setOrigin(.5).setDepth(10); hud.push(this.role);       // what YOU should be doing right now
+    const t1 = this.add.text(W / 2, 300, M.name, { ...this.font(84), color: M.hex }).setOrigin(.5).setDepth(12);     // round intro, fades out
+    const t2 = this.add.text(W / 2, 374, M.goal, this.font(36)).setOrigin(.5).setDepth(12);
+    this.tweens.add({ targets: [t1, t2], alpha: 0, delay: 2200, duration: 600, onComplete: () => { t1.destroy(); t2.destroy(); } });
 
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,E');
     this.lastIn = '';
@@ -1134,7 +1121,7 @@ class PlayScene extends Phaser.Scene {
   }
 
   /** Host: pass the mark on when the marked player and someone else touch (not during the cooldown).
-   *  tag / bomb: the carrier touches someone and they get it.   flag: someone touches the holder and STEALS it. Either way the other player ends up with it. */
+   *  bomb: the carrier touches someone and they get it.   flag: someone touches the holder and STEALS it. Either way the other player ends up with it. */
   tryTag(a, b) {
     if (a === b || this.over || this.time.now < this.cdUntil) return;
     const [c, o] = a.idx === this.it ? [a, b] : b.idx === this.it ? [b, a] : [null, null];   // c = marked player, o = the one touching them
@@ -1297,43 +1284,31 @@ class PlayScene extends Phaser.Scene {
     this.fxVisuals(time, cd); this.syncOrbs(time);
     const t = this.pl[this.it]; if (!t) return;
     const M = this.M, fast = M.id === 'bomb' && this.timeLeft <= 5;                  // the bomb gets twitchy in the last 5 seconds
-    this.glow.setPosition(t.x, t.y + 4).setScale(1 + Math.sin(time / (fast ? 60 : 120)) * .12);
-    this.tri.setPosition(t.x, t.y - M.dy + Math.sin(time / 150) * 3);
-    this.itTxt.setPosition(t.x, t.y - M.ty);
+    this.mark.setPosition(t.x, t.y - M.dy + Math.sin(time / 150) * 3);
     const hid = ((this.sp[this.it] || [0, 0])[1] & FX.INVIS) && this.it !== G.slot;      // an invisible IT hides its marker too
-    this.glow.setAlpha(hid ? .04 : .35); this.tri.setAlpha(hid ? .1 : 1); this.itTxt.setAlpha(hid ? .1 : 1);
-    if (M.id !== 'tag') this.modeVisuals(time, t, hid, fast);
+    this.mark.setAlpha(hid ? .1 : 1);
+    this.modeVisuals(time, t, hid, fast);
     const tv = String(Math.max(0, Math.ceil(this.timeLeft)));       // strings + change check: Phaser Text
     if (this.timerTxt.text !== tv) this.timerTxt.setText(tv);        // re-rasterises every call otherwise
     this.score.forEach((s, i) => { const v = String(G.wins[i]); if (s.text !== v) s.setText(v); });
   }
 
-  /** Bomb / flag cues, drawn the same on host and guests. RED + pushing outward = run away. GREEN + closing in = go catch it. */
+  /** Bomb / flag cues, drawn the same on host and guests. RED screen edges = the bomb is close, run. GREEN screen edges = the flag holder is near, go catch them. */
   modeVisuals(time, t, hid, fast) {
     const M = this.M, bomb = M.id === 'bomb', me = this.pl[G.slot], mine = this.it === G.slot, live = this.host || !!G.snap;   // guests wait for the first snapshot (until then `it` is a placeholder)
-    const left = Math.max(0, this.timeLeft), ph = (time % 1000) / 1000;
-
-    // The mark just moved: pop a ring in the mode colour on the new holder
-    if (live && this.it !== this.lastIt) { if (this.lastIt >= 0) this.burst(t.x, t.y, M.col, 120, 450); this.lastIt = this.it; }
+    const left = Math.max(0, this.timeLeft);
 
     // What should I be doing? (only rewritten when it changes)
     const key = live ? M.id + (mine ? 'c' : 'o') : '';
     if (key !== this.roleKey) { this.roleKey = key; this.role.setText(!live ? '' : mine ? M.carry : M.other).setColor(M.hex); }
 
     if (bomb) {
-      const br = Math.sin(time / (fast ? 70 : 220));
-      this.zone.setPosition(t.x, t.y).setScale(BLAST_R * 2 / 128 * (1 + br * (fast ? .05 : .025))).setAlpha(hid ? 0 : .6 + br * .25);
-      this.zoneFill.setPosition(t.x, t.y).setAlpha(hid ? 0 : fast ? .12 + .06 * br : .08);
-      this.spark.setPosition(this.tri.x + 8, this.tri.y - 21).setScale(.8 + Math.random() * 1.1).setAlpha(hid ? 0 : .5 + Math.random() * .5);   // fuse flicker
-      this.pulse.forEach((r, i) => { const q = (ph + i * .5) % 1;                                          // red waves push OUT from the bomb
-        r.setPosition(t.x, t.y).setScale(BLAST_R * 2 * (.2 + .8 * q) / 128).setAlpha(hid ? 0 : .7 * (1 - q)); });
+      this.spark.setPosition(this.mark.x + 8, this.mark.y - 21).setScale(.8 + Math.random() * 1.1).setAlpha(hid ? 0 : .5 + Math.random() * .5);   // fuse flicker
       const c = left <= 5 ? '#ff5a4d' : '#fff';                                                           // timer = the fuse
       if (c !== this.timerCol) { this.timerCol = c; this.timerTxt.setColor(c); }
       this.timerTxt.setScale(left <= 10 ? 1 + Math.max(0, Math.sin(time / (fast ? 80 : 160))) * .12 : 1);
     } else {
-      this.tri.setScale(1 + Math.sin(time / 130) * .06, 1 + Math.sin(time / 170) * .04);                   // flag waves
-      this.pulse.forEach((r, i) => { const q = (ph + i * .5) % 1;                                          // green rings CLOSE IN on the holder
-        r.setPosition(t.x, t.y).setScale((230 - 170 * q) / 128).setAlpha(hid ? 0 : .85 * Math.sin(Math.PI * q)); });
+      this.mark.setScale(1 + Math.sin(time / 130) * .06, 1 + Math.sin(time / 170) * .04);                  // flag waves
     }
 
     // Screen edges: runners get a red warning as the bomb gets close; chasers get a faint green glow the nearer they are to the holder
@@ -1450,7 +1425,7 @@ class PlayScene extends Phaser.Scene {
     this.over = true; this.pl.forEach(p => { if (p.body) { p.body.setVelocity(0, 0); p.body.setAcceleration(0, 0); } });
     const c = this.it, carrier = this.pl[c], now = this.time.now; let lost;
     if (this.M.id === 'flag') lost = this.pl.map(p => p.idx).filter(i => i !== c);                  // only the flag holder wins the round
-    else { lost = [c];                                                                               // tag: IT loses. bomb: the carrier AND anyone caught in the blast
+    else { lost = [c];                                                                               // bomb: the carrier AND anyone caught in the blast
       if (this.M.id === 'bomb') this.pl.forEach(p => { if (p.idx !== c && !p.parked && now >= p.shieldUntil && Math.hypot(p.x - carrier.x, p.y - carrier.y) < BLAST_R) lost.push(p.idx); }); }
     this.pl.forEach(p => { if (!lost.includes(p.idx)) G.wins[p.idx]++; });
     const res = { it: c, lost, bx: carrier.x | 0, by: carrier.y | 0 };

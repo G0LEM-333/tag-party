@@ -29,7 +29,48 @@
     <p class="hint">Move: arrows / WASD &nbsp; Jump: W / Up / Space &nbsp; Drop down: S / Down &nbsp; Use power: E</p>
   </section>
 
-  <!-- 2. Host: choose a map (or open the game settings) -->
+  <!-- 2. Host: choose the game mode -->
+  <section id="scrMode" class="screen" hidden>
+    <h1 class="title small">CHOOSE MODE</h1>
+    <div class="islands two">
+      <button class="island" data-modeid="bomb" aria-label="Bomb Panic" data-focus>
+        <svg viewBox="0 0 320 240" aria-hidden="true" focusable="false">
+  <path d="M14 158H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#ff6b5e"/>
+  <path d="M14 194H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#d94a3f"/>
+  <rect x="10" y="146" width="300" height="12" fill="#ffb3a8"/><rect x="10" y="146" width="300" height="3" fill="#ffe3de"/>
+  <path d="M160 40Q162 18 192 16" fill="none" stroke="#1c2b38" stroke-width="12" stroke-linecap="round"/>
+  <path d="M160 40Q162 18 192 16" fill="none" stroke="#e8c88c" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="160" cy="96" r="50" fill="#1c2b38"/><circle cx="160" cy="96" r="42" fill="#3b4658"/>
+  <path d="M118 100a42 42 0 0 0 84 0Z" fill="#080c18" opacity=".3"/>
+  <rect x="140" y="38" width="40" height="18" fill="#1c2b38"/><rect x="145" y="42" width="30" height="9" fill="#8b97ab"/>
+  <circle cx="160" cy="100" r="12" fill="#ff3d2e"/>
+  <ellipse cx="137" cy="80" rx="12" ry="7" fill="#fff" opacity=".5" transform="rotate(-40 137 80)"/>
+  <path d="M192 2v28M178 16h28M182 6l20 20M202 6l-20 20" stroke="#ffd54f" stroke-width="5" stroke-linecap="round"/>
+</svg>
+        <span class="cap">BOMB PANIC</span>
+        <span class="sub">Pass the bomb on. Don't be near it at zero.</span>
+      </button>
+      <button class="island" data-modeid="flag" aria-label="Flag Hunt">
+        <svg viewBox="0 0 320 240" aria-hidden="true" focusable="false">
+  <path d="M14 158H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#3fcf7a"/>
+  <path d="M14 194H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#21a366"/>
+  <rect x="10" y="146" width="300" height="12" fill="#b6ffd2"/><rect x="10" y="146" width="300" height="3" fill="#e6fff0"/>
+  <g transform="translate(100 0) scale(3)">
+    <circle cx="10" cy="43" r="5.5" fill="#1c2b38"/><circle cx="10" cy="43" r="3" fill="#ffc400"/>
+    <rect x="7" y="3" width="6" height="40" fill="#1c2b38"/><rect x="8.5" y="4.5" width="3" height="37" fill="#ffc400"/>
+    <path d="M12 4Q24 1 37 9Q28 15 37 22Q24 26 12 24Z" fill="#1c2b38" stroke="#1c2b38" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M12 6Q24 3.5 33 9.5Q26 15 33 20.5Q24 23.5 12 22Z" fill="#2ee66b"/>
+    <path d="M21.00 9.00L22.29 12.22L25.76 12.45L23.09 14.68L23.94 18.05L21.00 16.20L18.06 18.05L18.91 14.68L16.24 12.45L19.71 12.22Z" fill="#fff"/>
+  </g>
+</svg>
+        <span class="cap">FLAG HUNT</span>
+        <span class="sub">Steal the flag. Hold it at zero to win.</span>
+      </button>
+    </div>
+    <button class="back" data-back="scrHome" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
+  </section>
+
+  <!-- 3. Host: choose a map (or open the game settings) -->
   <section id="scrMap" class="screen" hidden>
     <h1 class="title small">CHOOSE MAP</h1>
     <div class="islands">
@@ -119,17 +160,13 @@
     </div>
     <button class="btn" id="settingsBtn">GAME SETTINGS</button>
     <p class="note" id="mapNote"></p>
-    <button class="back" data-back="scrHome" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
+    <button class="back" data-back="scrMode" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
   </section>
 
-  <!-- 3. Host: game settings -->
+  <!-- 4. Host: game settings -->
   <section id="scrSettings" class="screen" hidden>
     <h1 class="title small">GAME SETTINGS</h1>
     <div class="rows">
-      <div class="row"><span class="lbl">GAME MODE</span>
-        <button class="step" data-set="mode" data-d="-1" aria-label="Previous game mode">&minus;</button>
-        <span class="val" id="vMode" aria-live="polite">CLASSIC TAG</span>
-        <button class="step" data-set="mode" data-d="1" aria-label="Next game mode">+</button></div>
       <div class="row"><span class="lbl">PLAYERS</span>
         <button class="step" data-set="players" data-d="-1" aria-label="Fewer players">&minus;</button>
         <span class="val" id="vPlayers" aria-live="polite">4</span>
@@ -143,12 +180,11 @@
         <span class="val" id="vPower" aria-live="polite">NORMAL</span>
         <button class="step" data-set="power" data-d="1" aria-label="More power-ups">+</button></div>
     </div>
-    <p class="note" id="modeNote" aria-live="polite"></p>
     <p class="note">Most players that can join the room. No bots: you need other people.</p>
     <button class="back" data-back="scrMap" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
   </section>
 
-  <!-- 4. Guest: enter a room code -->
+  <!-- 5. Guest: enter a room code -->
   <section id="scrJoin" class="screen" hidden>
     <h1 class="title small">JOIN GAME</h1>
     <label class="codebox"><span class="sr">Room code</span>
@@ -159,7 +195,7 @@
     <button class="back" data-back="scrHome" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
   </section>
 
-  <!-- 5. Lobby (host and guests) -->
+  <!-- 6. Lobby (host and guests) -->
   <section id="scrLobby" class="screen" hidden>
     <p class="lbl big">ROOM CODE</p>
     <div class="code" id="lobCode" aria-live="polite">&nbsp;</div>

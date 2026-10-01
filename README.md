@@ -27,13 +27,12 @@ Host it anywhere that supports WebSockets (Render, Railway, Fly.io...), then cha
 - Screen fit: the map is always 16:9 and as big as the window allows (never stretched). On other window shapes the leftover space is a framed bezel tinted by the map's sky.
 
 ## Game modes
-Pick one under HOST GAME -> GAME SETTINGS -> GAME MODE (guests get it automatically when the round starts).
-- **CLASSIC TAG** - the original. Whoever is IT when time runs out loses.
-- **BOMB PANIC** - run away from the bomb. The carrier chases and passes the bomb on by touching someone. At zero it explodes: the carrier and everyone inside the red blast ring lose (a shield protects you). Cues: red glow, bomb with a sparking fuse, a red keep-out ring with waves pushing outward, red screen edges when the bomb is close, timer turns red for the last 5 seconds.
-- **FLAG HUNT** - catch the flag holder. Everyone else chases them and touches to steal the flag. Whoever holds the flag at zero wins the round (only they score). Cues: green glow, waving flag, green rings closing in, faint green screen edges as you get near.
+The host picks the mode on the CHOOSE MODE screen (HOST GAME -> BOMB PANIC or FLAG HUNT), then the map. It is no longer a setting under GAME SETTINGS. Guests get the mode automatically when the round starts.
+- **BOMB PANIC** - run away from the bomb. The carrier chases and passes the bomb on by touching someone. At zero it explodes: the carrier and everyone within `BLAST_R` of them lose (a shield protects you). Cues: a bomb with a sparking fuse above the carrier, red screen edges when the bomb is close, timer turns red for the last 5 seconds. The blast radius is not drawn on screen.
+- **FLAG HUNT** - catch the flag holder. Everyone else chases them and touches to steal the flag. Whoever holds the flag at zero wins the round (only they score). Cues: a waving flag above the holder, faint green screen edges as you get near.
 
 Each mode also shows a role line under the timer (e.g. RUN FROM THE BOMB! / CATCH THE FLAG!) and a short intro at the start of the round.
-Modes live in the `MODES` table near the top of `src/game.js` (rename them there; `BLAST_R` is the bomb's blast radius, 0 = only the carrier loses).
+Modes live in the `MODES` table near the top of `src/game.js` (rename them there and in the CHOOSE MODE cards in `index.html`; `BLAST_R` is the bomb's blast radius, 0 = only the carrier loses).
 
 ## Network speed (instant movement)
 Before, a friend's move went friend -> server -> HOST -> (wait for the next 20/s snapshot) -> server -> you, and was then eased in twice (~45 ms each).

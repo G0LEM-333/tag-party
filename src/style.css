@@ -1,0 +1,78 @@
+/* Tag Party UI: flat sky-blue screens, chunky rounded white type, square white outlines. */
+:root {
+  --sky: #3e9abb;
+  --font: "Lilita One", "Arial Black", "Trebuchet MS", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: var(--sky); overflow: hidden; font-family: var(--font); color: #fff; }
+#game { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+canvas { display: block; width: 100% !important; height: 100% !important; margin: 0 !important; }   /* the map always fills the whole window */
+[hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- Esc menu in a game ---------- */
+#pause { position: fixed; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 28px; background: rgba(20, 24, 70, .62); }
+#pause[hidden] { display: none; }
+#pause h2 { font-weight: 400; }
+
+/* ---------- Menu shell ---------- */
+#menu { position: fixed; inset: 0; z-index: 5; background: var(--sky); }
+#menu.gone { display: none; }
+.screen { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: clamp(18px, 4.5vh, 44px); padding: 24px 24px 88px; overflow-y: auto; }
+
+.title { font-weight: 400; font-size: clamp(54px, min(11vw, 17vh), 120px); line-height: 1; letter-spacing: .01em; text-align: center; }
+.title.small { font-size: clamp(40px, min(8vw, 12vh), 84px); }
+.hint { position: absolute; left: 24px; right: 24px; bottom: 22px; text-align: center; font-size: 17px; line-height: 1.4; }
+.note { font-size: 19px; line-height: 1.35; text-align: center; min-height: 1.35em; }
+.lbl { font-size: clamp(22px, 3vw, 30px); }
+.lbl.big { font-size: clamp(24px, 3.4vw, 34px); }
+
+/* ---------- Buttons: transparent, 4px white outline; invert on hover / focus ---------- */
+.btn, .step, .back, .codebox input {
+  font: 400 clamp(22px, 3.2vw, 32px)/1 var(--font); color: #fff; background: transparent;
+  border: 4px solid #fff; border-radius: 0; cursor: pointer; }
+.btn { padding: .6em 1.2em; min-width: min(78vw, 340px); letter-spacing: .01em; }
+.btn:hover, .btn:focus-visible, .step:hover:not(:disabled), .step:focus-visible, .back:hover, .back:focus-visible {
+  background: #fff; color: var(--sky); outline: none; }
+.btn:active, .step:active:not(:disabled), .back:active, .island:active { transform: translateY(3px); }
+.stack { display: flex; flex-direction: column; gap: 18px; align-items: center; }
+
+/* ---------- Back arrow (bottom left) ---------- */
+.back { position: absolute; left: 24px; bottom: 24px; width: 56px; height: 56px; display: grid; place-items: center; padding: 0; }
+.back svg { width: 30px; height: 30px; }
+
+/* ---------- Map islands ---------- */
+.islands { display: flex; flex-wrap: wrap; justify-content: center; gap: clamp(16px, 3vw, 56px); }
+.island { background: none; border: 0; padding: 0; cursor: pointer; color: #fff; font: inherit;
+  transition: transform .18s ease-out; }
+.island svg { display: block; width: clamp(140px, 20.5vw, 290px); height: auto; overflow: visible; }
+.island .cap { display: block; margin-top: 8px; font-size: clamp(22px, 2.6vw, 30px); }
+.island:hover, .island:focus-visible { transform: translateY(-10px); outline: none; }
+.island:focus-visible .cap { text-decoration: underline; text-decoration-thickness: 4px; text-underline-offset: 6px; }
+
+/* ---------- Game settings ---------- */
+.rows { display: flex; flex-direction: column; gap: 16px; width: min(620px, 100%); }
+.row { display: grid; grid-template-columns: 1fr auto 150px auto; align-items: center; gap: 14px; }
+.row .lbl { text-align: left; }
+.step { width: 52px; height: 52px; padding: 0; font-size: 32px; display: grid; place-items: center; }
+.step:disabled { opacity: .35; cursor: default; }
+.val { text-align: center; font-size: clamp(24px, 3.2vw, 32px); }
+
+/* ---------- Join + lobby ---------- */
+.codebox input { width: min(78vw, 330px); text-align: center; text-transform: uppercase; letter-spacing: .3em; padding: .45em .3em .45em .6em;
+  font-size: clamp(40px, 7vw, 64px); cursor: text; }
+.codebox input::placeholder { color: rgba(255, 255, 255, .5); letter-spacing: .12em; }
+.codebox input:focus-visible { background: rgba(255, 255, 255, .16); outline: none; }
+.code { font-size: clamp(64px, 14vw, 140px); line-height: 1; letter-spacing: .12em; padding-left: .12em; }
+#lobCount { font-weight: 400; margin-left: .3em; }
+
+@media (max-height: 520px) {
+  .screen { gap: 12px; padding-bottom: 76px; }
+  .islands { gap: 16px; }
+  .island svg { width: clamp(120px, 19vw, 220px); }
+  .hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .island { transition: none; } }
+.btn:disabled { opacity: .4; cursor: default; background: transparent; color: #fff; }

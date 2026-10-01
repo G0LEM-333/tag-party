@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tag Party</title>
+</head>
+<body>
+<div id="game"></div>
+<div id="pause" hidden>
+  <h2 class="title small">PAUSED</h2>
+  <div class="stack">
+    <button class="btn" id="resumeBtn">RESUME</button>
+    <button class="btn" id="quitBtn">MAIN MENU</button>
+  </div>
+  <p class="note" id="pauseNote"></p>
+</div>
+
+<!-- Menu overlay (HTML). One <section class="screen"> is visible at a time. -->
+<div id="menu">
+
+  <!-- 1. Host or join -->
+  <section id="scrHome" class="screen">
+    <h1 class="title">TAG PARTY</h1>
+    <div class="stack">
+      <button class="btn" id="hostBtn" data-focus>HOST GAME</button>
+      <button class="btn" id="joinBtn">JOIN GAME</button>
+    </div>
+    <p class="hint">Move: arrows / WASD &nbsp; Jump: W / Up / Space &nbsp; Drop down: S / Down &nbsp; Use power: E</p>
+  </section>
+
+  <!-- 2. Host: choose a map (or open the game settings) -->
+  <section id="scrMap" class="screen" hidden>
+    <h1 class="title small">CHOOSE MAP</h1>
+    <div class="islands">
+      <button class="island" data-map="meadow" aria-label="Meadow map" data-focus>
+        <svg viewBox="0 0 320 240" aria-hidden="true" focusable="false">
+  <rect x="24" y="112" width="12" height="40" rx="6" fill="#01e064"/>
+  <path d="M150 152V124M182 152V132" stroke="#01e064" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="150" cy="120" r="6" fill="#fff"/><circle cx="150" cy="120" r="2.6" fill="#ffd23f"/>
+  <circle cx="182" cy="128" r="5" fill="#ff478b"/><circle cx="182" cy="128" r="2.2" fill="#fff"/>
+  <rect x="88" y="72" width="18" height="84" fill="#d7006d"/>
+  <path d="M97 116 70 98M97 102 130 88" stroke="#d7006d" stroke-width="7" stroke-linecap="round"/>
+  <rect x="66" y="14" width="62" height="60" rx="12" fill="#01e064"/>
+  <rect x="38" y="60" width="36" height="24" rx="9" fill="#01e064"/>
+  <rect x="120" y="68" width="40" height="26" rx="9" fill="#01e064"/>
+  <rect x="74" y="22" width="16" height="7" rx="3.5" fill="#7dffb6" opacity=".7"/>
+  <rect x="238" y="112" width="30" height="42" fill="#d7006d"/>
+  <rect x="206" y="80" width="94" height="42" rx="14" fill="#01e064"/>
+  <rect x="214" y="110" width="12" height="26" rx="6" fill="#01e064"/>
+  <rect x="276" y="110" width="12" height="18" rx="6" fill="#01e064"/>
+  <rect x="214" y="88" width="16" height="7" rx="3.5" fill="#7dffb6" opacity=".7"/>
+  <path d="M14 158H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#ff478b"/>
+  <path d="M14 194H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#ff196e"/>
+  <rect x="10" y="146" width="300" height="12" fill="#48c136"/>
+  <path d="M10 158 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 a7 7 0 0 0 14 0 V146 H10 Z" fill="#48c136"/>
+</svg>
+        <span class="cap">MEADOW</span>
+      </button>
+      <button class="island" data-map="snow" aria-label="Winter map">
+        <svg viewBox="0 0 320 240" aria-hidden="true" focusable="false">
+  <ellipse cx="176" cy="142" rx="46" ry="14" fill="#a4a5d7"/>
+  <ellipse cx="128" cy="147" rx="30" ry="9" fill="#b7b8ee"/>
+  <rect x="262" y="94" width="12" height="60" fill="#6778ce"/>
+  <rect x="236" y="38" width="62" height="58" rx="12" fill="#bbbeff"/>
+  <rect x="216" y="82" width="36" height="24" rx="9" fill="#bbbeff"/>
+  <rect x="282" y="72" width="34" height="24" rx="9" fill="#bbbeff"/>
+  <path d="M186 152V98a14 14 0 0 1 28 0v8" fill="none" stroke="#f7f4f6" stroke-width="9"/>
+  <path d="M186 152V98a14 14 0 0 1 28 0v8" fill="none" stroke="#e03741" stroke-width="9" stroke-dasharray="7 7"/>
+  <circle cx="60" cy="134" r="17" fill="#f7f4f6"/><circle cx="60" cy="110" r="13" fill="#f7f4f6"/><circle cx="60" cy="90" r="10" fill="#f7f4f6"/>
+  <path d="M48 110 30 100M72 110 90 100" stroke="#6a5a55" stroke-width="3" stroke-linecap="round"/>
+  <rect x="47" y="97" width="26" height="6" rx="2" fill="#e03741"/><rect x="66" y="99" width="7" height="16" rx="2" fill="#e03741"/>
+  <rect x="49" y="79" width="22" height="4" rx="1" fill="#606a72"/><rect x="53" y="65" width="14" height="15" rx="1" fill="#606a72"/><rect x="53" y="73" width="14" height="4" fill="#e03741"/>
+  <circle cx="56" cy="88" r="1.6" fill="#3a3f5c"/><circle cx="64" cy="88" r="1.6" fill="#3a3f5c"/><path d="M60 91l9 2-9 2z" fill="#ff8a3d"/>
+  <path d="M12 164H308V200Q308 220 288 220H32Q12 220 12 200Z" fill="#a3a9ff"/>
+  <path d="M12 198H308V200Q308 220 288 220H32Q12 220 12 200Z" fill="#878de8"/>
+  <rect x="12" y="150" width="296" height="14" fill="#b8d0ff"/><rect x="12" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="32" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="52" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="72" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="92" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="112" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="132" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="152" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="172" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="192" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="212" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="232" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="252" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="272" y="163" width="11" height="5" fill="#b8d0ff"/><rect x="292" y="163" width="11" height="5" fill="#b8d0ff"/>
+  <rect x="12" y="150" width="296" height="3" fill="#e9f0ff"/>
+  <path d="M40 112Q112 152 176 118" fill="none" stroke="#7c82c8" stroke-width="2"/><path d="M57.2 120.5v4" stroke="#7c82c8" stroke-width="2"/><ellipse cx="57.2" cy="128.5" rx="3.6" ry="5" fill="#e03741"/><path d="M79.7 128.6v4" stroke="#7c82c8" stroke-width="2"/><ellipse cx="79.7" cy="136.6" rx="3.6" ry="5" fill="#21a366"/><path d="M101.8 132.9v4" stroke="#7c82c8" stroke-width="2"/><ellipse cx="101.8" cy="140.9" rx="3.6" ry="5" fill="#ffd23f"/><path d="M123.5 133.4v4" stroke="#7c82c8" stroke-width="2"/><ellipse cx="123.5" cy="141.4" rx="3.6" ry="5" fill="#ff9f43"/><path d="M147.5 129.4v4" stroke="#7c82c8" stroke-width="2"/><ellipse cx="147.5" cy="137.4" rx="3.6" ry="5" fill="#e03741"/><path d="M168.3 121.8v4" stroke="#7c82c8" stroke-width="2"/><ellipse cx="168.3" cy="129.8" rx="3.6" ry="5" fill="#21a366"/>
+</svg>
+        <span class="cap">WINTER</span>
+      </button>
+      <button class="island" data-map="desert" aria-label="Desert map">
+        <svg viewBox="0 0 320 240" aria-hidden="true" focusable="false">
+  <path d="M196 152 252 56 308 152Z" fill="#f9d58f"/>
+  <path d="M252 56 308 152H262Z" fill="#e39a4a"/>
+  <rect x="78" y="70" width="26" height="86" rx="13" fill="#2fbf71"/>
+  <rect x="52" y="104" width="34" height="14" rx="7" fill="#2fbf71"/><rect x="52" y="82" width="14" height="38" rx="7" fill="#2fbf71"/>
+  <rect x="98" y="92" width="34" height="14" rx="7" fill="#2fbf71"/><rect x="118" y="68" width="14" height="38" rx="7" fill="#2fbf71"/>
+  <rect x="94" y="78" width="7" height="30" rx="3.5" fill="#146b3c" opacity=".28"/>
+  <rect x="84" y="78" width="4" height="30" rx="2" fill="#bdf5d5" opacity=".5"/>
+  <rect x="152" y="118" width="44" height="38" rx="19" fill="#2fbf71"/>
+  <circle cx="174" cy="118" r="7" fill="#ff4081"/><circle cx="174" cy="118" r="2.6" fill="#ffd23f"/>
+  <path d="M164 126V150M174 126V152M184 126V150" stroke="#146b3c" stroke-width="2.4" opacity=".3"/>
+  <path d="M14 158H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#e08a4a"/>
+  <path d="M14 194H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#a84a24"/>
+  <rect x="10" y="146" width="300" height="12" fill="#f9d58f"/><rect x="10" y="146" width="300" height="3" fill="#fff0c4"/>
+  <path d="M40 176h22M92 184h30M160 174h18M214 182h34M268 176h20" stroke="#c96a33" stroke-width="3" stroke-linecap="round"/>
+</svg>
+        <span class="cap">DESERT</span>
+      </button>
+      <button class="island" data-map="underwater" aria-label="Underwater map">
+        <svg viewBox="0 0 320 240" aria-hidden="true" focusable="false">
+  <path d="M60 152C46 132 74 112 60 92S72 56 62 34" fill="none" stroke="#2bc48a" stroke-width="8" stroke-linecap="round"/>
+  <path d="M62 122 88 110 62 102ZM58 98 32 86 58 80Z" fill="#2bc48a"/>
+  <path d="M150 152V122M150 132 130 108M150 124 172 100M130 108 118 92M172 100 186 84" fill="none" stroke="#b77bff" stroke-width="9" stroke-linecap="round"/>
+  <rect x="232" y="124" width="7" height="30" fill="#ff6fa5"/><ellipse cx="235" cy="102" rx="38" ry="32" fill="#ff6fa5"/>
+  <path d="M235 126 202 96M235 126 218 80M235 126 235 74M235 126 252 80M235 126 268 96" fill="none" stroke="#c2487a" stroke-width="2" opacity=".5"/>
+  <ellipse cx="219" cy="90" rx="11" ry="5" fill="#fff" opacity=".4"/>
+  <ellipse cx="116" cy="62" rx="17" ry="10" fill="#ffb74d"/><path d="M99 62 86 53V71Z" fill="#ffb74d"/><circle cx="125" cy="59" r="2.4" fill="#1c2b38"/>
+  <circle cx="176" cy="54" r="6" fill="none" stroke="#fff" stroke-width="2.5"/><circle cx="188" cy="34" r="4" fill="none" stroke="#fff" stroke-width="2.5"/><circle cx="278" cy="70" r="5" fill="none" stroke="#fff" stroke-width="2.5"/>
+  <path d="M14 158H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#f4766a"/>
+  <path d="M14 194H306V198Q306 220 284 220H36Q14 220 14 198Z" fill="#c2454f"/>
+  <rect x="10" y="146" width="300" height="12" fill="#ffb7a1"/><rect x="10" y="146" width="300" height="3" fill="#ffe3d6"/>
+  <path d="M44 176h.1M90 184h.1M150 174h.1M214 182h.1M268 176h.1" stroke="#d9574f" stroke-width="7" stroke-linecap="round"/>
+</svg>
+        <span class="cap">UNDERWATER</span>
+      </button>
+    </div>
+    <button class="btn" id="settingsBtn">GAME SETTINGS</button>
+    <button class="back" data-back="scrHome" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
+  </section>
+
+  <!-- 3. Host: game settings -->
+  <section id="scrSettings" class="screen" hidden>
+    <h1 class="title small">GAME SETTINGS</h1>
+    <div class="rows">
+      <div class="row"><span class="lbl">PLAYERS</span>
+        <button class="step" data-set="players" data-d="-1" aria-label="Fewer players">&minus;</button>
+        <span class="val" id="vPlayers" aria-live="polite">4</span>
+        <button class="step" data-set="players" data-d="1" aria-label="More players">+</button></div>
+      <div class="row"><span class="lbl">ROUND TIME</span>
+        <button class="step" data-set="time" data-d="-1" aria-label="Shorter round">&minus;</button>
+        <span class="val" id="vTime" aria-live="polite">60s</span>
+        <button class="step" data-set="time" data-d="1" aria-label="Longer round">+</button></div>
+      <div class="row"><span class="lbl">POWER-UPS</span>
+        <button class="step" data-set="power" data-d="-1" aria-label="Fewer power-ups">&minus;</button>
+        <span class="val" id="vPower" aria-live="polite">NORMAL</span>
+        <button class="step" data-set="power" data-d="1" aria-label="More power-ups">+</button></div>
+    </div>
+    <p class="note">Most players that can join the room. No bots: you need other people.</p>
+    <button class="back" data-back="scrMap" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
+  </section>
+
+  <!-- 4. Guest: enter a room code -->
+  <section id="scrJoin" class="screen" hidden>
+    <h1 class="title small">JOIN GAME</h1>
+    <label class="codebox"><span class="sr">Room code</span>
+      <input id="codeIn" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" data-focus>
+    </label>
+    <button class="btn" id="joinGo">JOIN</button>
+    <p class="note" id="joinMsg" role="status"></p>
+    <button class="back" data-back="scrHome" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
+  </section>
+
+  <!-- 5. Lobby (host and guests) -->
+  <section id="scrLobby" class="screen" hidden>
+    <p class="lbl big">ROOM CODE</p>
+    <div class="code" id="lobCode" aria-live="polite">&nbsp;</div>
+    <p class="lbl" id="lobPlayers">PLAYERS <b id="lobCount">1 / 4</b></p>
+    <p class="note" id="lobInfo"></p>
+    <button class="btn" id="startBtn" hidden data-focus>START ROUND</button>
+    <p class="note" id="lobNote" role="status"></p>
+    <button class="back" data-back="leave" aria-label="Leave room"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
+  </section>
+
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

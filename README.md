@@ -29,7 +29,7 @@ Host it anywhere that supports WebSockets (Render, Railway, Fly.io...), then cha
 ## Player colours + player-count slider
 - **Colours.** Everyone picks their own colour (12 to choose from, one player per colour). The host picks theirs on the CHOOSE MAP screen (under the players slider) and can change it in the lobby; guests pick in the lobby, in the row of little cats at the bottom. A colour someone else has is faded and crossed out and can't be clicked. A guest starts on the first free colour. If two people click the same colour at the same moment the host gives it to the first one and everyone's screen settles on that.
 - **Colours are locked when the round starts** and stay with the player for every round after (also on the results screen and in the score row). When someone leaves between rounds, their colour and win count are dropped and everyone else keeps theirs.
-- **Players slider** on CHOOSE MAP (2-12), under the maps. It is the same setting as PLAYERS in GAME SETTINGS, so the two always match.
+- **Players slider** on CHOOSE MAP (2-12), under the maps. It is the only place to set the player count (GAME SETTINGS now only has ROUND TIME and POWER-UPS).
 - How it works: `G.colors[slot]` (in `src/game.js`) holds each player's colour; `colorOf(slot)` is used everywhere a player is drawn or named. Guests send `{ t: 'color', c }` to the host, the host answers everyone with `{ t: 'lobby', colors }`, and the round-start message carries the final list. No change to `server.js` (it only relays), but redeploy the front-end together with it as usual.
 
 ## Game modes

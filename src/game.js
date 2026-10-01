@@ -894,15 +894,14 @@ function show(id) {
 }
 
 function paintSettings() {
-  $('vPlayers').textContent = $('vCap').textContent = $('capSlider').value = G.cap; $('capSlider').style.setProperty('--pct', (G.cap - 2) / 10 * 100 + '%');
+  $('vCap').textContent = $('capSlider').value = G.cap; $('capSlider').style.setProperty('--pct', (G.cap - 2) / 10 * 100 + '%');
   $('vTime').textContent = G.round + 's'; $('vPower').textContent = POWER_NAMES[G.power];
   $('mapNote').textContent = 'Mode: ' + MODE().name;
-  const at = { players: [G.cap, 2, 12], time: [TIMES.indexOf(G.round), 0, TIMES.length - 1], power: [G.power, 0, POWER_NAMES.length - 1] };
+  const at = { time: [TIMES.indexOf(G.round), 0, TIMES.length - 1], power: [G.power, 0, POWER_NAMES.length - 1] };
   document.querySelectorAll('.step').forEach(b => { const [v, lo, hi] = at[b.dataset.set]; b.disabled = +b.dataset.d < 0 ? v <= lo : v >= hi; });
 }
 function stepSetting(k, d) {
-  if (k === 'players') G.cap = clamp(G.cap + d, 2, 12);
-  else if (k === 'time') G.round = TIMES[clamp(TIMES.indexOf(G.round) + d, 0, TIMES.length - 1)];
+  if (k === 'time') G.round = TIMES[clamp(TIMES.indexOf(G.round) + d, 0, TIMES.length - 1)];
   else G.power = clamp(G.power + d, 0, POWER_NAMES.length - 1);
   paintSettings();
 }

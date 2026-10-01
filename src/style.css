@@ -99,8 +99,11 @@ canvas { display: block; margin: 0 !important;
 .swatch:disabled svg { opacity: .3; }
 .swatch:disabled::after { content: ''; position: absolute; left: 3px; right: 3px; top: calc(50% - 2px); height: 4px; background: #fff; transform: rotate(-45deg); }
 @media (max-width: 860px) { .swatches { grid-template-columns: repeat(6, auto); } .swatch { width: clamp(44px, 11vw, 60px); } }
-/* these two screens can be taller than a short window: start at the top and scroll instead of cutting the top off */
-#scrMap, #scrLobby { justify-content: center; justify-content: safe center; }
+/* these two screens can be taller than a short window. Plain `justify-content: center` would cut the TOP off (the room code!) and make it unreachable,
+   so they start at the top and the free space is shared by auto margins instead: centred when it fits, scrolls from the top when it doesn't. */
+#scrMap, #scrLobby { justify-content: flex-start; }
+#scrMap > .title, #scrLobby > .lbl.big { margin-top: auto; }
+#scrMap > .note, #scrLobby > .colorbox { margin-bottom: auto; }
 
 /* ---------- Join + lobby ---------- */
 .codebox input { width: min(78vw, 330px); text-align: center; text-transform: uppercase; letter-spacing: .3em; padding: .45em .3em .45em .6em;
@@ -134,3 +137,11 @@ canvas { display: block; margin: 0 !important;
   .swatch { width: clamp(34px, 5.2vw, 44px); }
   .colorbox { gap: 8px; }
 }
+
+/* Lobby = room code + players + start + colour picker: tighten it on shorter windows so it all fits (and the code stays big and on top). */
+@media (max-height: 800px) {
+  #scrLobby { gap: clamp(6px, 1.6vh, 14px); }
+  #scrLobby .code { font-size: clamp(48px, min(14vw, 15vh), 140px); }
+  #scrLobby .btn { padding: .45em 1.2em; }
+}
+@media (min-width: 861px) { #scrLobby { padding-bottom: 24px; } }          /* the back arrow sits far left of the colour row here, so no need to reserve room under it */

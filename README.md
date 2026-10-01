@@ -31,6 +31,9 @@ The host picks the mode on the CHOOSE MODE screen (HOST GAME -> BOMB PANIC or FL
 - **BOMB PANIC** - run away from the bomb. The carrier chases and passes the bomb on by touching someone. At zero it explodes: the carrier and everyone within `BLAST_R` of them lose (a shield protects you). Cues: a bomb with a sparking fuse above the carrier, red screen edges when the bomb is close, timer turns red for the last 5 seconds. The blast radius is not drawn on screen.
 - **FLAG HUNT** - catch the flag holder. Everyone else chases them and touches to steal the flag. Whoever holds the flag at zero wins the round (only they score). Cues: a waving flag above the holder, faint green screen edges as you get near.
 
+**Round result screen.** Every player gets their own verdict banner (YOU WIN! / YOU LOSE / IT'S A TIE), a one-line reason, and a tile per player showing how they ended (blew up, blasted, survived, winner...) with their win count. The host presses SPACE to play again (it unlocks about a second after the banner, so a jump at the buzzer can't skip it).
+**Blast rule.** In BOMB PANIC everyone inside `BLAST_R` of the carrier at zero loses with them (a shield still protects you). If nobody connected survives, the round is a TIE and nobody scores: with 2 players that means both were inside the blast.
+
 Each mode also shows a role line under the timer (e.g. RUN FROM THE BOMB! / CATCH THE FLAG!) and a short intro at the start of the round.
 Modes live in the `MODES` table near the top of `src/game.js` (rename them there and in the CHOOSE MODE cards in `index.html`; `BLAST_R` is the bomb's blast radius, 0 = only the carrier loses).
 

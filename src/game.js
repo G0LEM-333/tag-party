@@ -179,7 +179,7 @@ function onHostMsg(m) {
   else if (m.t === 'start') { setMap(m.map); G.mode = m.mode | 0; G.rid = m.rid; G.remote = {}; G.maxP = m.maxP; G.round = m.round; G.wins = m.wins;
     document.getElementById('menu').classList.add('gone'); activeScene().scene.start('Play'); }
   else if (m.t === 's') { G.snap = m; G.snapAt = performance.now(); }
-  else if (m.t === 'over') { G.wins = m.wins; activeScene().scene.start('GameOver', { it: m.it, lost: m.lost, bx: m.bx, by: m.by }); }
+  else if (m.t === 'over') { G.wins = m.wins; activeScene().scene.start('GameOver', { it: m.it, lost: m.lost, win: m.win, tie: m.tie, left: m.left, bx: m.bx, by: m.by }); }
 }
 
 /* ---------------- Shared drawing ---------------- */
@@ -1427,15 +1427,18 @@ class PlayScene extends Phaser.Scene {
     if (this.M.id === 'flag') lost = this.pl.map(p => p.idx).filter(i => i !== c);                  // only the flag holder wins the round
     else { lost = [c];                                                                               // bomb: the carrier AND anyone caught in the blast
       if (this.M.id === 'bomb') this.pl.forEach(p => { if (p.idx !== c && !p.parked && now >= p.shieldUntil && Math.hypot(p.x - carrier.x, p.y - carrier.y) < BLAST_R) lost.push(p.idx); }); }
-    this.pl.forEach(p => { if (!lost.includes(p.idx)) G.wins[p.idx]++; });
-    const res = { it: c, lost, bx: carrier.x | 0, by: carrier.y | 0 };
+    const here = this.pl.filter(p => !p.parked).map(p => p.idx);                                     // players still connected
+    const win = here.filter(i => !lost.includes(i));                                                  // survivors / the flag holder
+    const tie = here.length > 1 && !win.length;                                                       // everyone still here was in the blast (with 2 players: both) = a tie, nobody scores
+    win.forEach(i => G.wins[i]++);
+    const res = { it: c, lost, win, tie, left: this.pl.filter(p => p.parked).map(p => p.idx), bx: carrier.x | 0, by: carrier.y | 0 };
     broadcast({ t: 'over', ...res, wins: G.wins });
     this.scene.start('GameOver', res);
   }
 }
 
 /* =====================================================================
- * GameOverScene: announce the loser, SPACE (host) restarts
+ * GameOverScene: personal verdict (YOU WIN / YOU LOSE / TIE), one tile per player, SPACE (host) restarts
  * ===================================================================== */
 class GameOverScene extends Phaser.Scene {
   constructor() { super('GameOver'); }
@@ -1457,27 +1460,87 @@ class GameOverScene extends Phaser.Scene {
   create() {
     drawBg(this); drawLevel(this);
     this.add.rectangle(W / 2, H / 2, W, H, 0x000000, .45);
-    const M = MODE(), { it, bx, by } = this.d, lost = this.d.lost || [it], hud = [];
-    if (M.id === 'bomb') this.explode(bx, by);
-    const f = (s, c, stroke = 0) => {                            // coloured title gets a dark rim; the rest is flat white with a soft shadow
-      const o = { fontFamily: FONT, fontSize: s + 'px', color: c };
-      if (stroke) { o.stroke = '#1a2b3a'; o.strokeThickness = stroke; } else o.shadow = { offsetY: 4, color: 'rgba(38,34,120,.5)', blur: 0, fill: true };
-      return o; };
-    const hex = i => '#' + COLORS[i].toString(16).padStart(6, '0');
-    const title = M.id === 'flag' ? [NAMES[it] + ' WINS!', hex(it)]                                       // flag: the holder wins
-      : M.id === 'bomb' ? (lost.length === 1 ? [NAMES[it] + ' BLEW UP!', hex(it)] : ['BOOM!', '#ff6b5e'])   // bomb: carrier (+ anyone nearby) lose
-      : [NAMES[it] + ' LOSES!', hex(it)];
-    hud.push(this.add.text(W / 2, 250, title[0], f(120, title[1], 10)).setOrigin(.5));
-    if (M.id === 'bomb' && lost.length > 1) hud.push(this.add.text(W / 2, 330, lost.length + ' players caught in the blast', f(34, '#ffffff')).setOrigin(.5));
-    for (let i = 0; i < G.maxP; i++) {                          // round-win scoreboard
-      const x = W / 2 - (G.maxP - 1) * 45 + i * 90;
-      hud.push(this.add.circle(x, 400, 20, COLORS[i]).setStrokeStyle(4, 0x1c2b38));
-      hud.push(this.add.text(x, 450, G.wins[i], f(36, '#ffffff')).setOrigin(.5));
-      if (M.id === 'bomb' && lost.includes(i)) hud.push(this.add.graphics().lineStyle(7, 0xff3d2e).lineBetween(x - 15, 385, x + 15, 415).lineBetween(x + 15, 385, x - 15, 415));   // red X on everyone who blew up
-      if (M.id === 'flag' && i === it) hud.push(this.add.image(x, 352, 'flag'));                           // the flag sits above the winner
+    const M = MODE(), d = this.d, it = d.it, lost = d.lost || [it], tie = !!d.tie, left = d.left || [];
+    const win = d.win || Array.from({ length: G.maxP }, (_, i) => i).filter(i => !lost.includes(i));     // (older host: work it out here)
+    const me = G.slot, bomb = M.id === 'bomb', n = G.maxP, INK = 0x1c2b38;
+    const verdict = tie ? 'draw' : win.includes(me) ? 'win' : 'lose';
+    const TONE = { win: [0x3fcf7a, 0x21a366, 0x9bf0bf], lose: [0xff5a4d, 0xc2362c, 0xffa59c], draw: [0xffc83a, 0xc8901a, 0xffe49a] }[verdict];   // [face, shade, highlight]
+    if (bomb) this.explode(d.bx, d.by);
+
+    const hexOf = i => '#' + COLORS[i].toString(16).padStart(6, '0');
+    const txt = (x, y, str, size, o = {}) => {
+      const st = { fontFamily: FONT, fontSize: size + 'px', color: '#fff', shadow: { offsetY: Math.max(2, size / 12 | 0), color: 'rgba(38,34,120,.5)', blur: 0, fill: true }, ...o };
+      if (o.noShadow) delete st.shadow; delete st.noShadow;
+      return this.add.text(x, y, str, st).setOrigin(.5); };
+
+    // Why the round ended this way (one plain sentence)
+    const names = i => NAMES[i][0] + NAMES[i].slice(1).toLowerCase();
+    const others = lost.length - 1;
+    const why = !bomb ? `${names(it)} kept the flag until time ran out.`
+      : tie ? (n === 2 ? 'Both players were inside the blast.' : 'Nobody was outside the blast.')
+      : others ? `${names(it)} blew up and took ${others === 1 ? 'one more player' : others + ' more players'} with them.`
+      : `${names(it)} was holding the bomb when it went off.`;
+
+    // ---- confetti for a win (behind the interface) ----
+    const conf = [];
+    if (verdict === 'win') for (let k = 0; k < 44; k++) {
+      const c = this.add.rectangle(Math.random() * W, -20 - Math.random() * 160, 12, 7, COLORS[k % COLORS.length]).setVisible(false);
+      conf.push(c);
+      this.tweens.add({ targets: c, y: H + 30, x: c.x + (Math.random() - .5) * 220, angle: 360 * (Math.random() * 2 - 1), delay: 700 + Math.random() * 900,
+        duration: 1900 + Math.random() * 1500, onStart: () => c.setVisible(true), onComplete: () => c.destroy() }); }
+
+    // ---- verdict banner: flat ribbon in the same face / shade / highlight style as the menu art ----
+    const BH = 150, bandY = 92;
+    const g = this.add.graphics();
+    g.fillStyle(INK).fillRect(0, bandY - 5, W, BH + 10);                                              // dark rim above and below
+    g.fillStyle(TONE[0]).fillRect(0, bandY, W, BH);
+    g.fillStyle(TONE[2]).fillRect(0, bandY, W, 8);
+    g.fillStyle(TONE[1]).fillRect(0, bandY + BH - 16, W, 16);
+    const word = txt(W / 2, bandY + BH / 2 - 4, verdict === 'win' ? 'YOU WIN!' : verdict === 'lose' ? 'YOU LOSE' : "IT'S A TIE", 118, { stroke: '#1a2b3a', strokeThickness: 10 });
+    const banner = this.add.container(0, -300, [g, word]);
+    const reason = txt(W / 2, bandY + BH + 44, why, 34).setAlpha(0);
+
+    // ---- one tile per player ----
+    const tw = Math.min(150, 1140 / n), th = 250, cy = 470, small = n > 8;
+    const scale = n <= 6 ? 2.6 : small ? 1.8 : 2.2, fs = tw < 110 ? 16 : 20;
+    const tiles = [];
+    for (let i = 0; i < n; i++) {
+      const x = W / 2 - (n - 1) * tw / 2 + i * tw, w = tw - 12, mine = i === me, won = win.includes(i) && !tie, gone = left.includes(i);
+      const status = gone ? 'LEFT' : bomb ? (i === it ? 'BLEW UP' : lost.includes(i) ? 'BLASTED' : 'SURVIVED') : (i === it ? 'WINNER' : 'LOST');
+      const chip = gone ? 0x6b7a88 : tie ? 0xffc83a : win.includes(i) ? 0x3fcf7a : 0xff5a4d;
+      const t = this.add.container(x, cy);
+      t.add(this.add.rectangle(0, 0, w, th, INK, .42).setStrokeStyle(mine ? 5 : 3, mine ? 0xffffff : INK));
+      const cat = this.add.image(0, -50, 'p' + i).setScale(scale);
+      if (lost.includes(i) && !tie || gone) cat.setTint(0x8a96a3);                                    // the ones who lost look washed out
+      t.add(cat);
+      if (bomb && lost.includes(i) && !gone) t.add(this.add.graphics().lineStyle(7, 0xff3d2e).lineBetween(-16, -66, 16, -34).lineBetween(16, -66, -16, -34));   // red X on everyone who blew up
+      if (!bomb && won) t.add(this.add.image(0, -110, 'flag').setScale(.55));                            // the flag sits above the winner
+      t.add(txt(0, 20, NAMES[i], fs + 4, { color: hexOf(i), stroke: '#1a2b3a', strokeThickness: 4, noShadow: true }));
+      t.add(this.add.rectangle(0, 62, w - 12, 34, chip).setStrokeStyle(3, INK));
+      t.add(txt(0, 62, status, fs - 2, { color: '#1c2b38', noShadow: true }));
+      t.add(txt(0, 108, (G.wins[i] === 1 ? '1 win' : G.wins[i] + ' wins'), fs, {}));
+      if (mine) t.add(txt(0, -th / 2 - 16, 'YOU', 20, { stroke: '#1a2b3a', strokeThickness: 4, noShadow: true }));
+      t.setAlpha(0).setScale(.85); tiles.push(t);
+      if (won) this.tweens.add({ targets: cat, y: cat.y - 12, duration: 420, yoyo: true, repeat: -1, ease: 'Sine.easeInOut', delay: 900 });   // winners hop
     }
-    hud.push(this.add.text(W / 2, 580, G.isHost ? 'Press SPACE to play again' : 'Waiting for host to restart...', f(40, '#ffffff')).setOrigin(.5));
-    if (G.isHost) this.input.keyboard.once('keydown-SPACE', () => { if (!G.paused) startRound(); });
+
+    // ---- play again ----
+    const ready = [];
+    if (G.isHost) {
+      const kw = 132, kx = W / 2 - 83;
+      ready.push(this.add.rectangle(kx, 652, kw, 46, 0xffffff).setStrokeStyle(4, INK), txt(kx, 650, 'SPACE', 26, { color: '#1c2b38', noShadow: true }),
+                 txt(kx + 157, 652, 'Play again', 36));
+    } else ready.push(txt(W / 2, 652, 'Waiting for the host to start the next round...', 34));
+    ready.forEach(o => o.setAlpha(0));
+
+    // ---- one orchestrated entrance: (explosion) -> banner drops -> reason + tiles -> prompt ----
+    const t0 = bomb ? 650 : 150;
+    this.tweens.add({ targets: banner, y: 0, duration: 420, delay: t0, ease: 'Back.easeOut' });
+    this.tweens.add({ targets: reason, alpha: 1, duration: 250, delay: t0 + 330 });
+    tiles.forEach((t, i) => this.tweens.add({ targets: t, alpha: 1, scale: 1, duration: 260, delay: t0 + 380 + i * 35, ease: 'Back.easeOut' }));
+    this.tweens.add({ targets: ready, alpha: 1, duration: 300, delay: t0 + 1300 });
+    if (G.isHost) this.time.delayedCall(t0 + 1300, () => {                                            // short lock so a jump (SPACE) at the buzzer can't skip the result
+      this.input.keyboard.once('keydown-SPACE', () => { if (!G.paused) startRound(); }); });
   }
 }
 

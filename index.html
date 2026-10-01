@@ -118,6 +118,7 @@
       </button>
     </div>
     <button class="btn" id="settingsBtn">GAME SETTINGS</button>
+    <p class="note" id="mapNote"></p>
     <button class="back" data-back="scrHome" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
   </section>
 
@@ -125,6 +126,10 @@
   <section id="scrSettings" class="screen" hidden>
     <h1 class="title small">GAME SETTINGS</h1>
     <div class="rows">
+      <div class="row"><span class="lbl">GAME MODE</span>
+        <button class="step" data-set="mode" data-d="-1" aria-label="Previous game mode">&minus;</button>
+        <span class="val" id="vMode" aria-live="polite">CLASSIC TAG</span>
+        <button class="step" data-set="mode" data-d="1" aria-label="Next game mode">+</button></div>
       <div class="row"><span class="lbl">PLAYERS</span>
         <button class="step" data-set="players" data-d="-1" aria-label="Fewer players">&minus;</button>
         <span class="val" id="vPlayers" aria-live="polite">4</span>
@@ -138,6 +143,7 @@
         <span class="val" id="vPower" aria-live="polite">NORMAL</span>
         <button class="step" data-set="power" data-d="1" aria-label="More power-ups">+</button></div>
     </div>
+    <p class="note" id="modeNote" aria-live="polite"></p>
     <p class="note">Most players that can join the room. No bots: you need other people.</p>
     <button class="back" data-back="scrMap" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
   </section>

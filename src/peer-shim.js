@@ -2,7 +2,11 @@
  * (PeerJS = WebRTC + a third-party signalling server; Discord Activities block both.)
  * Supported: new Peer([id]) / new Peer(), peer.on('open'|'connection'|'error'), peer.connect(id), peer.destroy(),
  *            conn.send(), conn.on('open'|'data'|'close'), conn.open, conn.close()
- * The server only relays: guests <-> host. The host stays authoritative, exactly as before. */
+ * Extras for speed (not in PeerJS):
+ *   peer.sendPos(obj)  my position packet; the server relays it straight to everyone else (guests too, not just the host).
+ *                      Dropped if the socket is backed up: a newer one is always coming. Received with peer.on('pos', fn).
+ *   peer.sendAll(msg)  host only: ONE message that the server fans out to every guest.
+ * The server only relays. The host stays authoritative for the rules, exactly as before. */
 import { proxyBase } from './discord.js';
 
 class Emitter {
@@ -51,6 +55,9 @@ export class Peer extends Emitter {
 
   _tx(m) { if (this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); }
 
+  sendPos(o) { if (this.ws.readyState === 1 && this.ws.bufferedAmount < 16384) this.ws.send(JSON.stringify({ op: 'p', ...o })); }
+  sendAll(d) { this._tx({ op: 'all', d }); }
+
   _rx(m) {
     switch (m.op) {
       case 'hosting': this.emit('open', this.id); break;
@@ -65,6 +72,7 @@ export class Peer extends Emitter {
         if (m.from != null) { const c = this.conns.get(m.from); if (c) c.emit('data', m.d); }   // host receives
         else if (this.hostConn) this.hostConn.emit('data', m.d);                                 // guest receives
         break;
+      case 'p': this.emit('pos', m); break;
       case 'host-gone': if (this.hostConn) this.hostConn._closed(); break;
       case 'error': this.emit('error', { type: m.type }); break;
     }

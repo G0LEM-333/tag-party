@@ -60,7 +60,7 @@ canvas { display: block; margin: 0 !important;
 
 /* ---------- Game settings ---------- */
 .rows { display: flex; flex-direction: column; gap: 16px; width: min(620px, 100%); }
-.row { display: grid; grid-template-columns: 1fr auto 150px auto; align-items: center; gap: 14px; }
+.row { display: grid; grid-template-columns: 1fr auto minmax(130px, 220px) auto; align-items: center; gap: 14px; }
 .row .lbl { text-align: left; }
 .step { width: 52px; height: 52px; padding: 0; font-size: 32px; display: grid; place-items: center; }
 .step:disabled { opacity: .35; cursor: default; }

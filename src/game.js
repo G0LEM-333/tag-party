@@ -1,8 +1,9 @@
 /* =====================================================================
  * TAG PARTY - Phaser 3 platformer, 2-12 players, rooms over a WebSocket relay.
  * Everyone moves their OWN player locally (so your controls never wait on the network)
- * and just shares where they are. The host only referees the rules: who is IT, tags,
- * the timer, power-up orbs / powers, and relays everyone's positions.
+ * and just shares where they are. Position packets go straight from player to player through
+ * the relay server (~60 per second, with velocity so everyone can predict a few ms ahead).
+ * The host only referees the rules: who is IT, tags, the timer, power-up orbs / powers.
  * ===================================================================== */
 const W = 1280, H = 720;
 const COLORS = [0xe53935, 0x1e88e5, 0x43a047, 0xfdd835, 0x8e24aa, 0xfb8c00,
@@ -116,9 +117,36 @@ const POWER_RATES = [
   { cap: n => clamp(Math.ceil(n / 4), 1, 3), first: 8000, gap: 14000 },           // NORMAL (default)
   { cap: n => clamp(Math.ceil(n / 2) + 1, 2, 5), first: 500, gap: 4500 }];        // OFTEN (about half the old rate)
 
-// Shared game state (survives scene changes). power = index into POWER_RATES, map = key of MAPS.
-const G = { peer: null, isHost: false, slot: 0, maxP: 4, cap: 4, round: 60, power: 2, map: 'meadow',
-            conns: {}, inputs: {}, wins: Array(12).fill(0), snap: null, hostConn: null };
+// ---- Game modes ----
+// Every mode has ONE marked player (this.it). What differs is what the others want to do about it:
+//   tag  : the marked player is IT. Run away; whoever is IT at zero loses.
+//   bomb : the marked player carries the bomb. RUN AWAY from it; at zero it explodes and the carrier + anyone within BLAST_R lose.
+//   flag : the marked player holds the flag. CATCH them (touch to steal it); whoever holds it at zero wins the round.
+// To rename a mode, change `name` (and `tag`, the little label above the marked player). Set BLAST_R = 0 for a bomb that only hurts its carrier.
+const BLAST_R = 160;
+const MODES = [
+  { id: 'tag',  name: 'CLASSIC TAG', tag: 'IT',   hex: '#ffffff', col: 0xffffff, icon: 'tri',  dy: 32, ty: 50, gr: 30,
+    blurb: 'Whoever is IT when time runs out loses.' },
+  { id: 'bomb', name: 'BOMB PANIC',  tag: 'BOMB', hex: '#ff6b5e', col: 0xff3d2e, icon: 'bomb', dy: 40, ty: 62, gr: 40,
+    goal: 'RUN from the bomb!', other: 'RUN FROM THE BOMB!', carry: 'PASS THE BOMB ON!',
+    blurb: 'One player carries the bomb. Touch someone to pass it on. At zero it blows up: the carrier and anyone close by lose.' },
+  { id: 'flag', name: 'FLAG HUNT',   tag: 'FLAG', hex: '#5dff9a', col: 0x2ee66b, icon: 'flag', dy: 42, ty: 64, gr: 36,
+    goal: 'CATCH the flag holder!', other: 'CATCH THE FLAG!', carry: 'KEEP THE FLAG - RUN!',
+    blurb: 'One player holds the flag. Everyone else chases them and touches to steal it. Hold it at zero to win the round.' }];
+const MODE = () => MODES[G.mode] || MODES[0];
+
+// ---- Netcode tuning (all times in ms) ----
+const SEND_MS = 12;          // I send my position at most this often: 60-80 packets/s on any screen of 60 Hz or more (a gap of 15 would round a 144 Hz screen down to 48/s)...
+const BEAT_MS = 100;         // ...and at least this often even when standing still
+const SNAP_BEAT = 6;         // host: rules snapshot every N frames when nothing changed (~10/s). Any change (tag, power-up, freeze...) goes out at once.
+const REMOTE_SMOOTH = 20;    // how softly other players are eased onto their latest position. Lower = snappier but twitchier (the old value was 45, applied twice).
+const EXTRAP_X = 70, EXTRAP_Y = 30;   // how far ahead (ms) a late packet may be predicted from the sender's velocity. Y is short so landings don't sink into the floor.
+const STALE_MS = 400;        // a player's direct packets older than this -> fall back to the host snapshot
+
+// Shared game state (survives scene changes). power = index into POWER_RATES, map = key of MAPS, mode = index into MODES.
+// remote[slot] = latest position packet of every other player (host and guests alike). rid = round id, so a late packet from the last round is ignored.
+const G = { peer: null, isHost: false, slot: 0, maxP: 4, cap: 4, round: 60, power: 2, map: 'meadow', mode: 0, rid: 0, snapAt: 0,
+            conns: {}, remote: {}, wins: Array(12).fill(0), snap: null, hostConn: null };
 
 // The active map's data lives in these globals (set by setMap) so physics, art and networking all read the same thing.
 let PLATS, PADS, RAMPS, CRATES, SPOTS;
@@ -136,16 +164,24 @@ setMap('meadow');
 
 /* ---------------- Networking helpers ---------------- */
 const send = (conn, m) => { try { conn && conn.open && conn.send(m); } catch (e) {} };
-const broadcast = m => Object.values(G.conns).forEach(c => send(c, m));
+const broadcast = m => G.peer && G.peer.sendAll(m);              // ONE message; the server hands it to every guest
 const activeScene = () => game.scene.getScenes(true)[0] || game.scene.getScenes(false).find(s => game.scene.isPaused(s.scene.key));   // a paused scene counts too
+
+/** A position packet from another player (everyone gets these straight from the server). Keeps the newest one per player. */
+function onPos(m) {
+  if (m.r !== G.rid || m.s === G.slot || !(m.s >= 0)) return;     // another round, or an echo of myself
+  if (G.isHost && !G.conns[m.s]) return;                          // host: only players who are actually in the room
+  const r = G.remote[m.s] || (G.remote[m.s] = {});
+  r.x = +m.x; r.y = +m.y; r.vx = m.vx | 0; r.vy = m.vy | 0; r.f = m.f | 0; r.ec = m.ec | 0; r.at = performance.now();
+}
 
 /** Messages a guest receives from the host. */
 function onHostMsg(m) {
   if (m.t === 'welcome') G.slot = m.slot;
-  else if (m.t === 'start') { setMap(m.map); G.maxP = m.maxP; G.round = m.round; G.wins = m.wins;
+  else if (m.t === 'start') { setMap(m.map); G.mode = m.mode | 0; G.rid = m.rid; G.remote = {}; G.maxP = m.maxP; G.round = m.round; G.wins = m.wins;
     document.getElementById('menu').classList.add('gone'); activeScene().scene.start('Play'); }
-  else if (m.t === 's') G.snap = m;
-  else if (m.t === 'over') { G.wins = m.wins; activeScene().scene.start('GameOver', { loser: m.loser }); }
+  else if (m.t === 's') { G.snap = m; G.snapAt = performance.now(); }
+  else if (m.t === 'over') { G.wins = m.wins; activeScene().scene.start('GameOver', { it: m.it, lost: m.lost, bx: m.bx, by: m.by }); }
 }
 
 /* ---------------- Shared drawing ---------------- */
@@ -764,6 +800,42 @@ function makePowerTextures(s) {
     g.addColorStop(.93, 'rgba(255,255,255,.95)'); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.fillRect(0, 0, 128, 128); });
 }
 
+/** Textures for the bomb / flag modes: the two markers above the marked player and a soft screen-edge vignette (tinted per mode). */
+function makeModeTextures(s) {
+  const mk = (key, w, h, draw) => { const t = s.textures.createCanvas(key, w, h), c = t.getContext(); draw(c); t.refresh(); };
+  const INK = '#1c2b38';
+  mk('bomb', 40, 46, c => {                                                      // round black bomb with a cap and a fuse (the spark is a separate flickering sprite)
+    c.lineJoin = c.lineCap = 'round';
+    c.strokeStyle = INK; c.lineWidth = 7; c.beginPath(); c.moveTo(20, 11); c.quadraticCurveTo(22, 3, 29, 3); c.stroke();
+    c.strokeStyle = '#e8c88c'; c.lineWidth = 3; c.beginPath(); c.moveTo(20, 11); c.quadraticCurveTo(22, 3, 29, 3); c.stroke();
+    c.fillStyle = INK; c.beginPath(); c.arc(20, 29, 16.5, 0, 7); c.fill();
+    c.fillStyle = '#3b4658'; c.beginPath(); c.arc(20, 29, 13.5, 0, 7); c.fill();
+    c.fillStyle = 'rgba(8,12,24,.35)'; c.beginPath(); c.arc(20, 29, 13.5, .15, 3, false); c.fill();     // shaded underside
+    c.fillStyle = INK; c.fillRect(13, 8, 14, 8);
+    c.fillStyle = '#8b97ab'; c.fillRect(15, 10, 10, 4);
+    c.fillStyle = '#ff3d2e'; c.beginPath(); c.arc(20, 29, 4.5, 0, 7); c.fill();                           // red warning dot
+    c.fillStyle = 'rgba(255,255,255,.55)'; c.beginPath(); c.ellipse(13.5, 23, 4.5, 2.6, -.8, 0, 7); c.fill(); });
+
+  mk('flag', 40, 48, c => {                                                      // gold pole, green banner with a white star, small base
+    c.lineJoin = c.lineCap = 'round';
+    c.fillStyle = INK; c.beginPath(); c.arc(10, 43, 5.5, 0, 7); c.fill();
+    c.fillStyle = '#ffc400'; c.beginPath(); c.arc(10, 43, 3, 0, 7); c.fill();
+    c.fillStyle = INK; c.fillRect(7, 3, 6, 40);
+    c.fillStyle = '#ffc400'; c.fillRect(8.5, 4.5, 3, 37);
+    c.beginPath(); c.moveTo(12, 4); c.quadraticCurveTo(24, 1, 37, 9); c.quadraticCurveTo(28, 15, 37, 22); c.quadraticCurveTo(24, 26, 12, 24); c.closePath();
+    c.fillStyle = INK; c.fill(); c.lineWidth = 3; c.strokeStyle = INK; c.stroke();
+    c.beginPath(); c.moveTo(12, 6); c.quadraticCurveTo(24, 3.5, 33, 9.5); c.quadraticCurveTo(26, 15, 33, 20.5); c.quadraticCurveTo(24, 23.5, 12, 22); c.closePath();
+    c.fillStyle = '#2ee66b'; c.fill();
+    c.fillStyle = '#fff'; c.beginPath();
+    for (let k = 0; k < 10; k++) { const r = k % 2 ? 2.2 : 5, a = -Math.PI / 2 + k * Math.PI / 5; c.lineTo(21 + Math.cos(a) * r, 14 + Math.sin(a) * r); }
+    c.closePath(); c.fill(); });
+
+  mk('vig', 256, 144, c => {                                                     // transparent in the middle, solid at the edges (stretched over the screen, tinted per mode)
+    c.save(); c.scale(256, 144);
+    const g = c.createRadialGradient(.5, .5, .28, .5, .5, .72); g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(255,255,255,1)');
+    c.fillStyle = g; c.fillRect(0, 0, 1, 1); c.restore(); });
+}
+
 /* =====================================================================
  * MenuScene: only builds the shared textures. The menu itself is HTML (see "Menu UI" below).
  * ===================================================================== */
@@ -791,7 +863,7 @@ class MenuScene extends Phaser.Scene {
     c.generateTexture('cloud', 200, 80); c.destroy();
     const m = this.add.graphics(); m.fillStyle(0xffffff).fillCircle(4, 4, 4);                     // mote
     m.generateTexture('mote', 8, 8); m.destroy();
-    makePowerTextures(this); makeSeaTextures(this);
+    makePowerTextures(this); makeSeaTextures(this); makeModeTextures(this);
   }
 }
 
@@ -799,10 +871,10 @@ class MenuScene extends Phaser.Scene {
 function startRound() {
   const slots = Object.keys(G.conns).map(Number).sort((a, b) => a - b);
   if (!slots.length) return;                                   // no bots: need at least one other player
-  const old = G.conns, oldIn = G.inputs; G.conns = {}; G.inputs = {};
-  slots.forEach((o, k) => { G.conns[k + 1] = old[o]; G.inputs[k + 1] = oldIn[o]; old[o].slot = k + 1; send(old[o], { t: 'welcome', slot: k + 1 }); });   // close any gap left by someone who left the lobby
+  const old = G.conns; G.conns = {}; G.remote = {}; G.rid++;                      // new round id: stale packets from the last round are ignored
+  slots.forEach((o, k) => { G.conns[k + 1] = old[o]; old[o].slot = k + 1; send(old[o], { t: 'welcome', slot: k + 1 }); });   // close any gap left by someone who left the lobby
   G.maxP = slots.length + 1;
-  broadcast({ t: 'start', map: G.map, maxP: G.maxP, round: G.round, wins: G.wins });
+  broadcast({ t: 'start', map: G.map, mode: G.mode, rid: G.rid, maxP: G.maxP, round: G.round, wins: G.wins });
   document.getElementById('menu').classList.add('gone');
   activeScene().scene.start('Play');
 }
@@ -821,11 +893,13 @@ function show(id) {
 
 function paintSettings() {
   $('vPlayers').textContent = G.cap; $('vTime').textContent = G.round + 's'; $('vPower').textContent = POWER_NAMES[G.power];
-  const at = { players: [G.cap, 2, 12], time: [TIMES.indexOf(G.round), 0, TIMES.length - 1], power: [G.power, 0, POWER_NAMES.length - 1] };
+  $('vMode').textContent = MODE().name; $('modeNote').textContent = MODE().blurb; $('mapNote').textContent = 'Mode: ' + MODE().name;
+  const at = { mode: [G.mode, 0, MODES.length - 1], players: [G.cap, 2, 12], time: [TIMES.indexOf(G.round), 0, TIMES.length - 1], power: [G.power, 0, POWER_NAMES.length - 1] };
   document.querySelectorAll('.step').forEach(b => { const [v, lo, hi] = at[b.dataset.set]; b.disabled = +b.dataset.d < 0 ? v <= lo : v >= hi; });
 }
 function stepSetting(k, d) {
-  if (k === 'players') G.cap = clamp(G.cap + d, 2, 12);
+  if (k === 'mode') G.mode = clamp(G.mode + d, 0, MODES.length - 1);
+  else if (k === 'players') G.cap = clamp(G.cap + d, 2, 12);
   else if (k === 'time') G.round = TIMES[clamp(TIMES.indexOf(G.round) + d, 0, TIMES.length - 1)];
   else G.power = clamp(G.power + d, 0, POWER_NAMES.length - 1);
   paintSettings();
@@ -841,19 +915,20 @@ const say = msg => { ($('scrJoin').hidden ? $('lobNote') : $('joinMsg')).textCon
 function leaveRoom() {
   G.leaving = true;
   try { G.peer && G.peer.destroy(); } catch (e) {}
-  G.peer = G.hostConn = null; G.conns = {}; G.inputs = {}; G.isHost = false;
+  G.peer = G.hostConn = null; G.conns = {}; G.remote = {}; G.isHost = false;
   show('scrHome');
 }
 
 /** Host: open a room for the chosen map with the current settings. */
 function hostRoom(mapId) {
-  setMap(mapId); G.maxP = G.cap; G.isHost = true; G.slot = 0; G.conns = {}; G.inputs = {};
+  setMap(mapId); G.maxP = G.cap; G.isHost = true; G.slot = 0; G.conns = {}; G.remote = {}; G.rid = 0;
   const code = Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.random() * 24 | 0]).join('');
   $('lobCode').textContent = code; $('lobPlayers').hidden = false; $('startBtn').hidden = true; paintLobby();
-  $('lobInfo').textContent = `${MAPS[mapId].name} map, ${G.round}s rounds, power-ups ${POWER_NAMES[G.power].toLowerCase()}`;
+  $('lobInfo').textContent = `${MODE().name} on the ${MAPS[mapId].name} map, ${G.round}s rounds, power-ups ${POWER_NAMES[G.power].toLowerCase()}`;
   $('lobNote').textContent = 'Opening room...'; show('scrLobby');
   G.peer = new Peer('tagparty-' + code);
   G.peer.on('error', e => say('Could not open the room (' + e.type + '). Go back and try again.'));
+  G.peer.on('pos', onPos);
   G.peer.on('open', () => { $('startBtn').hidden = false; paintLobby(); });
   G.peer.on('connection', conn => {                             // a guest joined
     const used = Object.keys(G.conns).length + 1;
@@ -861,8 +936,7 @@ function hostRoom(mapId) {
     let slot = 1; while (G.conns[slot]) slot++;
     G.conns[slot] = conn; conn.slot = slot;                      // conn.slot can change when slots are compacted at the start
     conn.on('open', () => { send(conn, { t: 'welcome', slot: conn.slot }); paintLobby(); });
-    conn.on('data', m => { if (m.t === 'me') G.inputs[conn.slot] = m; });      // a guest sharing where it is (+ E-press counter)
-    conn.on('close', () => { if (G.conns[conn.slot] === conn) { delete G.conns[conn.slot]; delete G.inputs[conn.slot]; } paintLobby(); });
+    conn.on('close', () => { if (G.conns[conn.slot] === conn) { delete G.conns[conn.slot]; delete G.remote[conn.slot]; } paintLobby(); });   // (positions + E presses arrive as 'pos' packets, see onPos)
   });
 }
 
@@ -871,6 +945,7 @@ function joinRoom(code) {
   G.isHost = false; G.leaving = false; $('joinMsg').textContent = 'Connecting...';
   try { G.peer && G.peer.destroy(); } catch (e) {}
   G.peer = new Peer();
+  G.peer.on('pos', onPos);
   G.peer.on('open', () => {
     const c = G.hostConn = G.peer.connect('tagparty-' + code, { reliable: false });
     c.on('open', () => {
@@ -930,10 +1005,11 @@ class PlayScene extends Phaser.Scene {
 
   create() {
     drawBg(this); drawLevel(this);
-    this.host = G.isHost; if (!this.host) G.snap = null; else G.inputs = {}; this.frame = 0; this.timeLeft = G.round;   // new round: host forgets last round's shared positions
+    this.host = G.isHost; if (!this.host) G.snap = null; this.sinceSnap = 0; this.timeLeft = G.round;   // (G.remote is cleared when the round starts, see startRound / onHostMsg)
+    this.M = MODE(); this.lastIt = -1; this.roleKey = ''; this.vk = 0; this.timerCol = '#fff';
     this.it = Phaser.Math.Between(0, G.maxP - 1); this.cdUntil = 0; this.over = false;
     this.pu = []; this.puId = 0; this.spawnAt = this.time.now + POWER_RATES[G.power].first; this.pus = {}; this.sp = []; this.su = [];   // orbs (host), orb sprites, per-player [power, fx]
-    this.ec = 0; this.lastSendT = 0; this.lastMe = ''; this.effT = 0; this.hudShow = -1; this.pwLock = 0; this.pwSpent = false;
+    this.ec = 0; this.lastSendT = 0; this.lastMe = ''; this.lastRules = ''; this.effT = 0; this.hudShow = -1; this.pwLock = 0; this.pwSpent = false;
     this.physics.world.setBoundsCollision(false, false, true, true);   // wrap on X instead
 
     // Solid platform bodies (invisible zones under the drawn graphics)
@@ -977,10 +1053,20 @@ class PlayScene extends Phaser.Scene {
       return p.body.velocity.y >= 0 && p.body.prev.y + p.body.height <= z.body.top + 4;
     });
 
-    // "IT" indicator: glow + white triangle + text
-    this.glow = this.add.circle(0, 0, 30, 0xffffff, .35).setDepth(4);
-    this.tri = this.add.image(0, 0, 'tri').setDepth(6);
-    this.itTxt = this.add.text(0, 0, 'IT', this.font(18)).setOrigin(.5).setDepth(6);
+    // Marker over the marked player: glow + icon + label. Classic = white "IT" triangle; bomb = red bomb; flag = green flag.
+    const M = this.M;
+    this.glow = this.add.circle(0, 0, M.gr, M.col, .35).setDepth(4);
+    this.tri = this.add.image(0, 0, M.icon).setDepth(6);
+    this.itTxt = this.add.text(0, 0, M.tag, { ...this.font(18), color: M.hex }).setOrigin(.5).setDepth(6);
+    if (M.id !== 'tag') {
+      // BOMB = red "keep away": a fixed blast-radius zone, waves pushing outward, a flickering fuse spark, red screen edges when the bomb is close.
+      // FLAG = green "come get it": rings closing in on the holder, a waving flag, soft green screen edges as you get near.
+      this.zoneFill = this.add.circle(0, 0, BLAST_R, M.col, .1).setDepth(3).setVisible(M.id === 'bomb');
+      this.zone = this.add.image(0, 0, 'ring').setTint(M.col).setDepth(3.5).setVisible(M.id === 'bomb');
+      this.pulse = [0, 1].map(() => this.add.image(0, 0, 'ring').setTint(M.col).setDepth(3.6).setAlpha(0));
+      this.spark = this.add.image(0, 0, 'mote').setTint(0xffd54f).setDepth(6.5).setVisible(M.id === 'bomb');
+      this.vig = this.add.image(W / 2, H / 2, 'vig').setDisplaySize(W, H).setTint(M.col).setDepth(9).setAlpha(0);
+    }
 
     // HUD
     const hud = [];
@@ -1001,6 +1087,12 @@ class PlayScene extends Phaser.Scene {
     this.hudBar = this.add.graphics().setDepth(12);
     this.msg = this.add.text(W / 2, 130, '', this.font(46)).setOrigin(.5).setDepth(10);
     hud.push(this.hudIcon, this.hudEmpty, this.hudName, this.hudKey, this.hudBar, this.msg);
+    if (M.id !== 'tag') {
+      this.role = this.add.text(W / 2, 98, '', this.font(26)).setOrigin(.5).setDepth(10); hud.push(this.role);     // what YOU should be doing right now
+      const t1 = this.add.text(W / 2, 300, M.name, { ...this.font(84), color: M.hex }).setOrigin(.5).setDepth(12);   // round intro, fades out
+      const t2 = this.add.text(W / 2, 374, M.goal, this.font(36)).setOrigin(.5).setDepth(12);
+      this.tweens.add({ targets: [t1, t2], alpha: 0, delay: 2200, duration: 600, onComplete: () => { t1.destroy(); t2.destroy(); } });
+    }
 
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,E');
     this.lastIn = '';
@@ -1041,13 +1133,15 @@ class PlayScene extends Phaser.Scene {
     return { l: dx < -15, r: dx > 15, j, d: false };
   }
 
-  /** Host: transfer IT when the (non-cooling-down) IT player touches someone. */
+  /** Host: pass the mark on when the marked player and someone else touch (not during the cooldown).
+   *  tag / bomb: the carrier touches someone and they get it.   flag: someone touches the holder and STEALS it. Either way the other player ends up with it. */
   tryTag(a, b) {
     if (a === b || this.over || this.time.now < this.cdUntil) return;
-    const [x, y] = a.idx === this.it ? [a, b] : b.idx === this.it ? [b, a] : [null, null];
-    if (!x) return;
-    if (this.time.now < x.frozenUntil || this.time.now < y.shieldUntil) return;   // a frozen IT can't tag; a shield blocks tags
-    this.it = y.idx; this.cdUntil = this.time.now + 1500;
+    const [c, o] = a.idx === this.it ? [a, b] : b.idx === this.it ? [b, a] : [null, null];   // c = marked player, o = the one touching them
+    if (!c) return;
+    const [x, y] = this.M.id === 'flag' ? [o, c] : [c, o];                          // x = does the touching, y = gets touched
+    if (this.time.now < x.frozenUntil || this.time.now < y.shieldUntil) return;   // a frozen player can't tag / steal; a shield blocks it
+    this.it = o.idx; this.cdUntil = this.time.now + 1500;
   }
 
   /** Host: IT touches someone? (Players are shared positions now, so this is a plain box check instead of physics overlap.) */
@@ -1057,10 +1151,34 @@ class PlayScene extends Phaser.Scene {
   }
 
   /** Smoothly follow a shared position (snaps when far, e.g. after wrapping across the edge). */
-  follow(p, x, y, dt) {
+  follow(p, x, y, dt, tau = 45) {
     if (Math.abs(p.x - x) > 250 || Math.abs(p.y - y) > 250) { p.x = x; p.y = y; return; }
-    const k = 1 - Math.exp(-dt / 45);
+    const k = 1 - Math.exp(-dt / tau);
     p.x += (x - p.x) * k; p.y += (y - p.y) * k;
+  }
+
+  /** Put another player where they are RIGHT NOW: their last packet, moved on by (time since it arrived) x (their velocity), then eased in lightly. */
+  followRemote(p, s, now, dt) {
+    const age = Math.max(0, now - s.at);
+    this.follow(p, s.x + s.vx * Math.min(age, EXTRAP_X) / 1000, s.y + s.vy * Math.min(age, EXTRAP_Y) / 1000, dt, REMOTE_SMOOTH);
+    p.setFlipX(!!s.f);
+  }
+
+  /** Share MY position (and velocity, and the E-press counter) with everyone. About 60/s while moving, a slow heartbeat when still. `force` = send right now (E pressed). */
+  sendPos(now, force) {
+    const me = this.pl[G.slot], v = me.body.velocity, x = me.x | 0, y = me.y | 0, f = me.flipX ? 1 : 0, vx = v.x | 0, vy = v.y | 0;
+    const key = x + ',' + y + ',' + f + ',' + vx + ',' + vy + ',' + this.ec, since = now - this.lastSendT;
+    if (!force && (since < SEND_MS || (key === this.lastMe && since < BEAT_MS))) return;
+    this.lastMe = key; this.lastSendT = now;
+    G.peer && G.peer.sendPos({ s: G.slot, r: G.rid, x, y, f, vx, vy, ec: this.ec });
+  }
+
+  /** Host: send the rules state (who is IT, orbs, powers, freezes, timer) the moment something changes, otherwise only a slow heartbeat. Positions ride along as a fallback. */
+  pushRules(time) {
+    const cd = time < this.cdUntil, rules = JSON.stringify([this.it, cd, this.sp, this.su]);
+    if (rules === this.lastRules && ++this.sinceSnap < SNAP_BEAT) return;         // unchanged: only a heartbeat every SNAP_BEAT frames
+    this.lastRules = rules; this.sinceSnap = 0;
+    broadcast({ t: 's', it: this.it, time: this.timeLeft, cd, u: this.su, p: this.pl.map((p, i) => [p.x | 0, p.y | 0, p.flipX ? 1 : 0, ...this.sp[i]]) });
   }
 
   /** Host: keep a player on a diagonal ramp (Arcade physics has no slopes, so it's done by hand). */
@@ -1140,34 +1258,35 @@ class PlayScene extends Phaser.Scene {
       if (pressedE) { me.ec = inp.ec; this.activate(me, inp); }                       // host owns the rules, so it just activates directly
     } else if (pressedE) { me.ec = inp.ec; this.predictPower(me, inp); }
     this.drive(me, inp);
+    const t0 = performance.now();
+    this.sendPos(t0, pressedE);                                                      // tell everyone where I am, right away
 
     if (this.host) {
       // 2) Host: take everyone else's shared position + E presses, then referee.
       this.pl.forEach((p, i) => {
         if (i === 0) return;
         if (!G.conns[i]) return this.dropOut(p, i);                                   // that player left: no bot takes over
-        const s = G.inputs[i]; if (!s) return;
-        this.follow(p, s.x, s.y, dt); p.setFlipX(!!s.f);
+        const s = G.remote[i]; if (!s) return;
+        this.followRemote(p, s, t0, dt);
         if ((s.ec | 0) > p.ec) { p.ec = s.ec | 0; this.activate(p, {}); }              // their E press
       });
       this.tagCheck();
       this.pickups(now);
       this.sp = this.pl.map(p => [p.power, this.fx(p, now)]); this.su = this.pu.map(u => [u.id, u.type, u.x, u.y]);
       this.timeLeft -= dt / 1000;
-      if (++this.frame % 3 === 0) broadcast({ t: 's', it: this.it, time: this.timeLeft,
-        cd: time < this.cdUntil, u: this.su,
-        p: this.pl.map((p, i) => [p.x | 0, p.y | 0, p.flipX ? 1 : 0, ...this.sp[i]]) });
+      this.pushRules(time);
       if (this.timeLeft <= 0) return this.endRound();
     } else {
-      // 2) Guest: just share where I am (about 30 times a second), and take everyone else's positions from the host.
-      const mine = { t: 'me', x: me.x | 0, y: me.y | 0, f: me.flipX ? 1 : 0, ec: this.ec }, str = mine.x + ',' + mine.y + ',' + mine.f + ',' + mine.ec;
-      if (++this.frame % 2 === 0 && (str !== this.lastMe || time - this.lastSendT > 120) || pressedE) { this.lastMe = str; this.lastSendT = time; send(G.hostConn, mine); }
-      const n = G.snap; if (n) { this.it = n.it; this.timeLeft = n.time; this.cd = n.cd;
+      // 2) Guest: everyone else's position comes straight from their own packets; the host snapshot only carries the rules (and a fallback position).
+      const n = G.snap; if (n) { this.it = n.it; this.timeLeft = n.time - (t0 - G.snapAt) / 1000; this.cd = n.cd;      // timer keeps counting between snapshots
         this.sp = n.p.map(q => [q[3], q[4]]); this.su = n.u || [];
         if (!this.sp[G.slot] || !this.sp[G.slot][0]) this.pwSpent = false;
         me.netFrozen = !!(n.p[G.slot] && (n.p[G.slot][4] & FX.FROZEN));               // the one thing the host can do TO me: freeze
-        n.p.forEach((q, i) => { const p = this.pl[i]; if (!p || i === G.slot) return;   // never overwrite my own position
-          this.follow(p, q[0], q[1], dt); p.setFlipX(!!q[2]); }); }
+      }
+      this.pl.forEach((p, i) => { if (i === G.slot) return;                          // never overwrite my own position
+        const s = G.remote[i];
+        if (s && t0 - s.at < STALE_MS) this.followRemote(p, s, t0, dt);
+        else { const q = n && n.p[i]; if (q) { this.follow(p, q[0], q[1], dt); p.setFlipX(!!q[2]); } } });          // no fresh packets (just joined / left): use the host's copy
     }
     this.visuals(time);
   }
@@ -1177,14 +1296,54 @@ class PlayScene extends Phaser.Scene {
     const cd = this.host ? time < this.cdUntil : this.cd;
     this.fxVisuals(time, cd); this.syncOrbs(time);
     const t = this.pl[this.it]; if (!t) return;
-    this.glow.setPosition(t.x, t.y + 4).setScale(1 + Math.sin(time / 120) * .12);
-    this.tri.setPosition(t.x, t.y - 32 + Math.sin(time / 150) * 3);
-    this.itTxt.setPosition(t.x, t.y - 50);
+    const M = this.M, fast = M.id === 'bomb' && this.timeLeft <= 5;                  // the bomb gets twitchy in the last 5 seconds
+    this.glow.setPosition(t.x, t.y + 4).setScale(1 + Math.sin(time / (fast ? 60 : 120)) * .12);
+    this.tri.setPosition(t.x, t.y - M.dy + Math.sin(time / 150) * 3);
+    this.itTxt.setPosition(t.x, t.y - M.ty);
     const hid = ((this.sp[this.it] || [0, 0])[1] & FX.INVIS) && this.it !== G.slot;      // an invisible IT hides its marker too
     this.glow.setAlpha(hid ? .04 : .35); this.tri.setAlpha(hid ? .1 : 1); this.itTxt.setAlpha(hid ? .1 : 1);
+    if (M.id !== 'tag') this.modeVisuals(time, t, hid, fast);
     const tv = String(Math.max(0, Math.ceil(this.timeLeft)));       // strings + change check: Phaser Text
     if (this.timerTxt.text !== tv) this.timerTxt.setText(tv);        // re-rasterises every call otherwise
     this.score.forEach((s, i) => { const v = String(G.wins[i]); if (s.text !== v) s.setText(v); });
+  }
+
+  /** Bomb / flag cues, drawn the same on host and guests. RED + pushing outward = run away. GREEN + closing in = go catch it. */
+  modeVisuals(time, t, hid, fast) {
+    const M = this.M, bomb = M.id === 'bomb', me = this.pl[G.slot], mine = this.it === G.slot, live = this.host || !!G.snap;   // guests wait for the first snapshot (until then `it` is a placeholder)
+    const left = Math.max(0, this.timeLeft), ph = (time % 1000) / 1000;
+
+    // The mark just moved: pop a ring in the mode colour on the new holder
+    if (live && this.it !== this.lastIt) { if (this.lastIt >= 0) this.burst(t.x, t.y, M.col, 120, 450); this.lastIt = this.it; }
+
+    // What should I be doing? (only rewritten when it changes)
+    const key = live ? M.id + (mine ? 'c' : 'o') : '';
+    if (key !== this.roleKey) { this.roleKey = key; this.role.setText(!live ? '' : mine ? M.carry : M.other).setColor(M.hex); }
+
+    if (bomb) {
+      const br = Math.sin(time / (fast ? 70 : 220));
+      this.zone.setPosition(t.x, t.y).setScale(BLAST_R * 2 / 128 * (1 + br * (fast ? .05 : .025))).setAlpha(hid ? 0 : .6 + br * .25);
+      this.zoneFill.setPosition(t.x, t.y).setAlpha(hid ? 0 : fast ? .12 + .06 * br : .08);
+      this.spark.setPosition(this.tri.x + 8, this.tri.y - 21).setScale(.8 + Math.random() * 1.1).setAlpha(hid ? 0 : .5 + Math.random() * .5);   // fuse flicker
+      this.pulse.forEach((r, i) => { const q = (ph + i * .5) % 1;                                          // red waves push OUT from the bomb
+        r.setPosition(t.x, t.y).setScale(BLAST_R * 2 * (.2 + .8 * q) / 128).setAlpha(hid ? 0 : .7 * (1 - q)); });
+      const c = left <= 5 ? '#ff5a4d' : '#fff';                                                           // timer = the fuse
+      if (c !== this.timerCol) { this.timerCol = c; this.timerTxt.setColor(c); }
+      this.timerTxt.setScale(left <= 10 ? 1 + Math.max(0, Math.sin(time / (fast ? 80 : 160))) * .12 : 1);
+    } else {
+      this.tri.setScale(1 + Math.sin(time / 130) * .06, 1 + Math.sin(time / 170) * .04);                   // flag waves
+      this.pulse.forEach((r, i) => { const q = (ph + i * .5) % 1;                                          // green rings CLOSE IN on the holder
+        r.setPosition(t.x, t.y).setScale((230 - 170 * q) / 128).setAlpha(hid ? 0 : .85 * Math.sin(Math.PI * q)); });
+    }
+
+    // Screen edges: runners get a red warning as the bomb gets close; chasers get a faint green glow the nearer they are to the holder
+    let k = 0;
+    if (live && !mine && !hid && me && !me.parked) {
+      const d = Math.hypot(me.x - t.x, me.y - t.y);
+      k = bomb ? Phaser.Math.Clamp(1 - (d - BLAST_R) / 240, 0, 1) * (.5 + .1 * Math.sin(time / (fast ? 60 : 180)))
+               : Phaser.Math.Clamp(1 - d / 520, 0, 1) * .38;
+    }
+    this.vk += (k - this.vk) * .2; this.vig.setAlpha(this.vk);
   }
 
   /** Status bit-flags for a player (sent to guests, and used for drawing on the host too). */
@@ -1289,9 +1448,14 @@ class PlayScene extends Phaser.Scene {
   /** Host: freeze, credit everyone but the loser, and move to GameOver. */
   endRound() {
     this.over = true; this.pl.forEach(p => { if (p.body) { p.body.setVelocity(0, 0); p.body.setAcceleration(0, 0); } });
-    this.pl.forEach(p => { if (p.idx !== this.it) G.wins[p.idx]++; });
-    broadcast({ t: 'over', loser: this.it, wins: G.wins });
-    this.scene.start('GameOver', { loser: this.it });
+    const c = this.it, carrier = this.pl[c], now = this.time.now; let lost;
+    if (this.M.id === 'flag') lost = this.pl.map(p => p.idx).filter(i => i !== c);                  // only the flag holder wins the round
+    else { lost = [c];                                                                               // tag: IT loses. bomb: the carrier AND anyone caught in the blast
+      if (this.M.id === 'bomb') this.pl.forEach(p => { if (p.idx !== c && !p.parked && now >= p.shieldUntil && Math.hypot(p.x - carrier.x, p.y - carrier.y) < BLAST_R) lost.push(p.idx); }); }
+    this.pl.forEach(p => { if (!lost.includes(p.idx)) G.wins[p.idx]++; });
+    const res = { it: c, lost, bx: carrier.x | 0, by: carrier.y | 0 };
+    broadcast({ t: 'over', ...res, wins: G.wins });
+    this.scene.start('GameOver', res);
   }
 }
 
@@ -1300,21 +1464,42 @@ class PlayScene extends Phaser.Scene {
  * ===================================================================== */
 class GameOverScene extends Phaser.Scene {
   constructor() { super('GameOver'); }
-  init(d) { this.loser = d.loser; }
+  init(d) { this.d = d; }
+
+  /** Bomb: a fireball, shockwaves and sparks where the bomb went off (the level is still drawn behind), plus a flash and shake. */
+  explode(x, y) {
+    const cam = this.cameras.main; cam.flash(450, 255, 220, 120); cam.shake(500, .012);
+    const ball = this.add.circle(x, y, 20, 0xffb300, .95);
+    this.tweens.add({ targets: ball, scale: BLAST_R * 1.15 / 20, alpha: 0, duration: 750, ease: 'Cubic.easeOut', onComplete: () => ball.destroy() });
+    [[0xff3d2e, 1], [0xffffff, .7]].forEach(([col, k], i) => {
+      const r = this.add.image(x, y, 'ring').setTint(col).setScale(.2);
+      this.tweens.add({ targets: r, scale: BLAST_R * 2.6 * k / 128, alpha: 0, duration: 800 + i * 150, delay: i * 90, ease: 'Cubic.easeOut', onComplete: () => r.destroy() }); });
+    for (let n = 0; n < 16; n++) {
+      const a = n / 16 * Math.PI * 2 + Math.random() * .3, d = BLAST_R * (.9 + Math.random() * .9), m = this.add.image(x, y, 'mote').setTint(n % 2 ? 0xffd54f : 0xff7043).setScale(1 + Math.random() * 1.2);
+      this.tweens.add({ targets: m, x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, alpha: 0, duration: 650 + Math.random() * 350, ease: 'Cubic.easeOut', onComplete: () => m.destroy() }); }
+  }
 
   create() {
     drawBg(this); drawLevel(this);
     this.add.rectangle(W / 2, H / 2, W, H, 0x000000, .45);
-    const hud = [];
+    const M = MODE(), { it, bx, by } = this.d, lost = this.d.lost || [it], hud = [];
+    if (M.id === 'bomb') this.explode(bx, by);
     const f = (s, c, stroke = 0) => {                            // coloured title gets a dark rim; the rest is flat white with a soft shadow
       const o = { fontFamily: FONT, fontSize: s + 'px', color: c };
       if (stroke) { o.stroke = '#1a2b3a'; o.strokeThickness = stroke; } else o.shadow = { offsetY: 4, color: 'rgba(38,34,120,.5)', blur: 0, fill: true };
       return o; };
-    hud.push(this.add.text(W / 2, 250, NAMES[this.loser] + ' LOSES!', f(120, '#' + COLORS[this.loser].toString(16).padStart(6, '0'), 10)).setOrigin(.5));
+    const hex = i => '#' + COLORS[i].toString(16).padStart(6, '0');
+    const title = M.id === 'flag' ? [NAMES[it] + ' WINS!', hex(it)]                                       // flag: the holder wins
+      : M.id === 'bomb' ? (lost.length === 1 ? [NAMES[it] + ' BLEW UP!', hex(it)] : ['BOOM!', '#ff6b5e'])   // bomb: carrier (+ anyone nearby) lose
+      : [NAMES[it] + ' LOSES!', hex(it)];
+    hud.push(this.add.text(W / 2, 250, title[0], f(120, title[1], 10)).setOrigin(.5));
+    if (M.id === 'bomb' && lost.length > 1) hud.push(this.add.text(W / 2, 330, lost.length + ' players caught in the blast', f(34, '#ffffff')).setOrigin(.5));
     for (let i = 0; i < G.maxP; i++) {                          // round-win scoreboard
       const x = W / 2 - (G.maxP - 1) * 45 + i * 90;
       hud.push(this.add.circle(x, 400, 20, COLORS[i]).setStrokeStyle(4, 0x1c2b38));
       hud.push(this.add.text(x, 450, G.wins[i], f(36, '#ffffff')).setOrigin(.5));
+      if (M.id === 'bomb' && lost.includes(i)) hud.push(this.add.graphics().lineStyle(7, 0xff3d2e).lineBetween(x - 15, 385, x + 15, 415).lineBetween(x + 15, 385, x - 15, 415));   // red X on everyone who blew up
+      if (M.id === 'flag' && i === it) hud.push(this.add.image(x, 352, 'flag'));                           // the flag sits above the winner
     }
     hud.push(this.add.text(W / 2, 580, G.isHost ? 'Press SPACE to play again' : 'Waiting for host to restart...', f(40, '#ffffff')).setOrigin(.5));
     if (G.isHost) this.input.keyboard.once('keydown-SPACE', () => { if (!G.paused) startRound(); });

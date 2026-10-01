@@ -1,12 +1,18 @@
 /* Tag Party UI: flat sky-blue screens, chunky rounded white type, square white outlines. */
 :root {
   --sky: #3e9abb;
+  --bezel: #12143f;                      /* bars around the map on non-16:9 windows (in a game they are tinted by the map's sky, see drawBg) */
   --font: "Lilita One", "Arial Black", "Trebuchet MS", sans-serif;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: var(--sky); overflow: hidden; font-family: var(--font); color: #fff; }
+html, body { width: 100%; height: 100%; background: var(--bezel); overflow: hidden; font-family: var(--font); color: #fff; }
 #game { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-canvas { display: block; width: 100% !important; height: 100% !important; margin: 0 !important; }   /* the map always fills the whole window */
+/* The map is always 16:9 and as big as the window allows. At exactly 16:9 it fills the whole screen (the frame below is
+   drawn OUTSIDE the canvas, so it costs no space); on any other shape the left-over space is a bezel around it. */
+canvas { display: block; margin: 0 !important;
+  width: min(100vw, calc(100vh * 16 / 9)) !important; height: min(100vh, calc(100vw * 9 / 16)) !important;
+  width: min(100vw, calc(100dvh * 16 / 9)) !important; height: min(100dvh, calc(100vw * 9 / 16)) !important;   /* dvh: phone browsers with a collapsing address bar */
+  box-shadow: 0 0 0 4px #fff, 0 0 0 11px #1c2b38, 0 0 70px 14px rgba(0, 0, 0, .55); }
 [hidden] { display: none !important; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 

@@ -22,3 +22,6 @@ Host it anywhere that supports WebSockets (Render, Railway, Fly.io...), then cha
 - Phaser and the font are bundled by Vite instead of loaded from jsdelivr / Google Fonts (blocked in Activities).
 - PeerJS (WebRTC + third-party server) replaced by src/peer-shim.js + server.js (WebSocket relay).
   game.js is untouched; the host is still authoritative.
+- Lag fix: every player now moves their OWN character locally and just shares where it is, so controls never wait on the host's PC.
+  The host only referees the rules (who is IT, tags, timer, power-up orbs) and relays positions. server.js is unchanged.
+- Screen fit: the map is always 16:9 and as big as the window allows (never stretched). On other window shapes the leftover space is a framed bezel tinted by the map's sky.

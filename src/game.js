@@ -1,7 +1,8 @@
 /* =====================================================================
- * TAG PARTY - Phaser 3 platformer, 2-12 players, WebRTC rooms (PeerJS).
- * Host-authoritative: the host runs the physics (no bots, only real players);
- * guests send inputs and render the snapshots they receive.
+ * TAG PARTY - Phaser 3 platformer, 2-12 players, rooms over a WebSocket relay.
+ * Everyone moves their OWN player locally (so your controls never wait on the network)
+ * and just shares where they are. The host only referees the rules: who is IT, tags,
+ * the timer, power-up orbs / powers, and relays everyone's positions.
  * ===================================================================== */
 const W = 1280, H = 720;
 const COLORS = [0xe53935, 0x1e88e5, 0x43a047, 0xfdd835, 0x8e24aa, 0xfb8c00,
@@ -155,7 +156,7 @@ function onHostMsg(m) {
 const SKIES = { meadow: ['#1b1f5c', '#4a3f95', '#a5679f'], snow: ['#a6aefd', '#b7bdff'], desert: ['#ffb487', '#ffd9a8', '#ffeccb'], underwater: ['#59d6e6', '#2aa0cf', '#1b6fb0'] };
 function drawBg(s) {
   MAPS[G.map].bg(s);
-  document.body.style.background = 'linear-gradient(' + (SKIES[G.map] || ['#3e9abb', '#3e9abb']).join(',') + ')';   // only visible in a window taller than 16:9
+  document.body.style.background = 'linear-gradient(rgba(14,16,48,.8),rgba(14,16,48,.8)), linear-gradient(' + (SKIES[G.map] || ['#3e9abb', '#3e9abb']).join(',') + ')';   // the bezel (bars around the 16:9 map): a dark tint of the map's sky
 }
 
 /** Night meadow: purple sky, moon glow, stars and hills. */
@@ -860,7 +861,7 @@ function hostRoom(mapId) {
     let slot = 1; while (G.conns[slot]) slot++;
     G.conns[slot] = conn; conn.slot = slot;                      // conn.slot can change when slots are compacted at the start
     conn.on('open', () => { send(conn, { t: 'welcome', slot: conn.slot }); paintLobby(); });
-    conn.on('data', m => { if (m.t === 'in') G.inputs[conn.slot] = m; });
+    conn.on('data', m => { if (m.t === 'me') G.inputs[conn.slot] = m; });      // a guest sharing where it is (+ E-press counter)
     conn.on('close', () => { if (G.conns[conn.slot] === conn) { delete G.conns[conn.slot]; delete G.inputs[conn.slot]; } paintLobby(); });
   });
 }
@@ -922,17 +923,17 @@ function initUI() {
 initUI();
 
 /* =====================================================================
- * PlayScene: gameplay. Host simulates; guests mirror snapshots.
+ * PlayScene: gameplay. Every machine simulates its own player; remote players are mirrored from shared positions.
  * ===================================================================== */
 class PlayScene extends Phaser.Scene {
   constructor() { super('Play'); }
 
   create() {
     drawBg(this); drawLevel(this);
-    this.host = G.isHost; if (!this.host) G.snap = null; this.frame = 0; this.timeLeft = G.round;
+    this.host = G.isHost; if (!this.host) G.snap = null; else G.inputs = {}; this.frame = 0; this.timeLeft = G.round;   // new round: host forgets last round's shared positions
     this.it = Phaser.Math.Between(0, G.maxP - 1); this.cdUntil = 0; this.over = false;
     this.pu = []; this.puId = 0; this.spawnAt = this.time.now + POWER_RATES[G.power].first; this.pus = {}; this.sp = []; this.su = [];   // orbs (host), orb sprites, per-player [power, fx]
-    this.ec = 0; this.lastSendT = 0; this.effT = 0; this.hudShow = -1;
+    this.ec = 0; this.lastSendT = 0; this.lastMe = ''; this.effT = 0; this.hudShow = -1; this.pwLock = 0; this.pwSpent = false;
     this.physics.world.setBoundsCollision(false, false, true, true);   // wrap on X instead
 
     // Solid platform bodies (invisible zones under the drawn graphics)
@@ -955,28 +956,26 @@ class PlayScene extends Phaser.Scene {
     this.pl = []; this.group = this.physics.add.group();
     for (let i = 0; i < G.maxP; i++) {
       const x = 120 + i * (1040 / G.maxP);
-      // Guests just mirror snapshots (plain sprites); the host uses physics bodies.
+      // Only MY player gets a physics body (I move myself). Everyone else is a plain sprite that mirrors shared positions.
       // NB: body settings are applied AFTER group.create, which would otherwise reset them.
-      const p = (this.host ? this.group.create(x, 650, 'p' + i) : this.add.sprite(x, 650, 'p' + i)).setDepth(5);
+      const mine = i === G.slot;
+      const p = (mine ? this.group.create(x, 650, 'p' + i) : this.add.sprite(x, 650, 'p' + i)).setDepth(5);
       p.idx = i; p.pj = false; p.hold = 0;
       p.power = 0; p.ec = 0; p.pfx = 0; p.speedUntil = p.shieldUntil = p.invisUntil = p.frozenUntil = p.dashUntil = p.castUntil = p.busyUntil = 0;
       p.coyote = -1e9; p.buffer = -1e9; p.jumpT = -1e9; p.dropUntil = 0;
-      if (this.host) p.body.setSize(30, 32).setOffset(3, 4).setMaxVelocity(330, 1700).setCollideWorldBounds(true);
+      if (mine) p.body.setSize(30, 32).setOffset(3, 4).setMaxVelocity(330, 1700).setCollideWorldBounds(true);
       this.pl.push(p);
     }
     // Shield bubble + ice block per player (toggled from snapshot flags)
     this.aura = this.pl.map(() => ({ sh: this.add.image(0, 0, 'bubble').setDepth(5.5).setVisible(false),
                                      ice: this.add.image(0, 0, 'ice').setDepth(5.5).setVisible(false) }));
-    if (this.host) {
-      this.physics.world.gravity.y = 1800;
-      // One-way platforms: land on top, pass through from below / while dropping (S / Down)
-      this.physics.add.collider(this.group, plats, null, (p, z) => {
-        if (z.floor || z.solid) return true;
-        if (this.time.now < p.dropUntil) return false;
-        return p.body.velocity.y >= 0 && p.body.prev.y + p.body.height <= z.body.top + 4;
-      });
-      this.physics.add.overlap(this.group, this.group, (a, b) => this.tryTag(a, b));
-    }
+    this.physics.world.gravity.y = 1800;
+    // One-way platforms: land on top, pass through from below / while dropping (S / Down). Only my own body collides.
+    this.physics.add.collider(this.group, plats, null, (p, z) => {
+      if (z.floor || z.solid) return true;
+      if (this.time.now < p.dropUntil) return false;
+      return p.body.velocity.y >= 0 && p.body.prev.y + p.body.height <= z.body.top + 4;
+    });
 
     // "IT" indicator: glow + white triangle + text
     this.glow = this.add.circle(0, 0, 30, 0xffffff, .35).setDepth(4);
@@ -1024,7 +1023,7 @@ class PlayScene extends Phaser.Scene {
 
   /** Host: a player who disconnected mid-round is parked off-screen; if they were IT, IT passes to someone still here. */
   dropOut(p, i) {
-    if (p.body.enable) { p.body.enable = false; p.setVisible(false); p.x = p.y = -500; p.power = 0; }
+    if (!p.parked) { p.parked = true; p.setVisible(false); p.x = p.y = -500; p.power = 0; }
     if (this.it === i) { const here = this.pl.map((_, k) => k).filter(k => k === 0 || G.conns[k]); this.it = here[Math.random() * here.length | 0]; this.cdUntil = this.time.now + 1500; }
   }
 
@@ -1051,6 +1050,19 @@ class PlayScene extends Phaser.Scene {
     this.it = y.idx; this.cdUntil = this.time.now + 1500;
   }
 
+  /** Host: IT touches someone? (Players are shared positions now, so this is a plain box check instead of physics overlap.) */
+  tagCheck() {
+    const it = this.pl[this.it]; if (!it || it.parked) return;
+    for (const o of this.pl) if (o !== it && !o.parked && Math.abs(o.x - it.x) < 32 && Math.abs(o.y - it.y) < 34) this.tryTag(it, o);
+  }
+
+  /** Smoothly follow a shared position (snaps when far, e.g. after wrapping across the edge). */
+  follow(p, x, y, dt) {
+    if (Math.abs(p.x - x) > 250 || Math.abs(p.y - y) > 250) { p.x = x; p.y = y; return; }
+    const k = 1 - Math.exp(-dt / 45);
+    p.x += (x - p.x) * k; p.y += (y - p.y) * k;
+  }
+
   /** Host: keep a player on a diagonal ramp (Arcade physics has no slopes, so it's done by hand). */
   rampCollide(p) {
     const b = p.body, was = p.onRamp; p.onRamp = false;
@@ -1067,7 +1079,7 @@ class PlayScene extends Phaser.Scene {
   /** Host: apply one player's input to its physics body. */
   drive(p, inp) {
     this.rampCollide(p);
-    const b = p.body, now = this.time.now, frozen = now < p.frozenUntil, dashing = !frozen && now < p.dashUntil, speedy = now < p.speedUntil;
+    const b = p.body, now = this.time.now, frozen = now < p.frozenUntil || !!p.netFrozen, dashing = !frozen && now < p.dashUntil, speedy = now < p.speedUntil;
     if (frozen) inp = { ...inp, l: 0, r: 0, j: false, d: false };
     const dir = inp.r ? 1 : inp.l ? -1 : 0;
     const grounded = (b.blocked.down || b.touching.down || p.onRamp) && now - p.jumpT > 100;
@@ -1109,16 +1121,36 @@ class PlayScene extends Phaser.Scene {
     p.wasDash = dashing;
   }
 
+  /** My own E press, applied instantly to MY movement (the host still decides the rules and echoes the effect back to everyone). */
+  predictPower(p, inp) {
+    const t = (this.sp[G.slot] || [0])[0], now = this.time.now;
+    if (!t || p.netFrozen || (this.pwSpent && now < this.pwLock)) return;
+    this.pwSpent = true; this.pwLock = now + 2000;                                  // don't predict again until the host confirms the power is gone
+    if (t === 1) p.speedUntil = now + EFFECT_MS;
+    else if (t === 3) { p.dashDir = inp.r ? 1 : inp.l ? -1 : p.flipX ? -1 : 1; p.dashUntil = now + DASH_MS; }
+  }
+
   update(time, dt) {
     if (this.over) return;
+    const now = this.time.now, me = this.pl[G.slot], inp = this.localInput();
+
+    // 1) Move MYSELF, right now, with my own keyboard - no waiting on anyone.
+    const pressedE = inp.ec > me.ec;
     if (this.host) {
-      const now = this.time.now;
+      if (pressedE) { me.ec = inp.ec; this.activate(me, inp); }                       // host owns the rules, so it just activates directly
+    } else if (pressedE) { me.ec = inp.ec; this.predictPower(me, inp); }
+    this.drive(me, inp);
+
+    if (this.host) {
+      // 2) Host: take everyone else's shared position + E presses, then referee.
       this.pl.forEach((p, i) => {
-        if (i > 0 && !G.conns[i]) return this.dropOut(p, i);                                        // that player left: no bot takes over
-        const inp = i === 0 ? this.localInput() : (G.inputs[i] || {});
-        if ((inp.ec | 0) > p.ec) { p.ec = inp.ec | 0; this.activate(p, inp); }                       // E pressed
-        this.drive(p, inp);
+        if (i === 0) return;
+        if (!G.conns[i]) return this.dropOut(p, i);                                   // that player left: no bot takes over
+        const s = G.inputs[i]; if (!s) return;
+        this.follow(p, s.x, s.y, dt); p.setFlipX(!!s.f);
+        if ((s.ec | 0) > p.ec) { p.ec = s.ec | 0; this.activate(p, {}); }              // their E press
       });
+      this.tagCheck();
       this.pickups(now);
       this.sp = this.pl.map(p => [p.power, this.fx(p, now)]); this.su = this.pu.map(u => [u.id, u.type, u.x, u.y]);
       this.timeLeft -= dt / 1000;
@@ -1127,12 +1159,15 @@ class PlayScene extends Phaser.Scene {
         p: this.pl.map((p, i) => [p.x | 0, p.y | 0, p.flipX ? 1 : 0, ...this.sp[i]]) });
       if (this.timeLeft <= 0) return this.endRound();
     } else {
-      const inp = this.localInput(), s = JSON.stringify(inp);
-      if (s !== this.lastIn || time - this.lastSendT > 120) { this.lastIn = s; this.lastSendT = time; send(G.hostConn, inp); }   // also re-sent now and then (unreliable channel)
+      // 2) Guest: just share where I am (about 30 times a second), and take everyone else's positions from the host.
+      const mine = { t: 'me', x: me.x | 0, y: me.y | 0, f: me.flipX ? 1 : 0, ec: this.ec }, str = mine.x + ',' + mine.y + ',' + mine.f + ',' + mine.ec;
+      if (++this.frame % 2 === 0 && (str !== this.lastMe || time - this.lastSendT > 120) || pressedE) { this.lastMe = str; this.lastSendT = time; send(G.hostConn, mine); }
       const n = G.snap; if (n) { this.it = n.it; this.timeLeft = n.time; this.cd = n.cd;
         this.sp = n.p.map(q => [q[3], q[4]]); this.su = n.u || [];
-        n.p.forEach((q, i) => { const p = this.pl[i]; if (!p) return;
-          p.x = Phaser.Math.Linear(p.x, q[0], .5); p.y = Phaser.Math.Linear(p.y, q[1], .5); p.setFlipX(!!q[2]); }); }
+        if (!this.sp[G.slot] || !this.sp[G.slot][0]) this.pwSpent = false;
+        me.netFrozen = !!(n.p[G.slot] && (n.p[G.slot][4] & FX.FROZEN));               // the one thing the host can do TO me: freeze
+        n.p.forEach((q, i) => { const p = this.pl[i]; if (!p || i === G.slot) return;   // never overwrite my own position
+          this.follow(p, q[0], q[1], dt); p.setFlipX(!!q[2]); }); }
     }
     this.visuals(time);
   }
@@ -1253,7 +1288,7 @@ class PlayScene extends Phaser.Scene {
 
   /** Host: freeze, credit everyone but the loser, and move to GameOver. */
   endRound() {
-    this.over = true; this.pl.forEach(p => { p.body.setVelocity(0, 0); p.body.setAcceleration(0, 0); });
+    this.over = true; this.pl.forEach(p => { if (p.body) { p.body.setVelocity(0, 0); p.body.setAcceleration(0, 0); } });
     this.pl.forEach(p => { if (p.idx !== this.it) G.wins[p.idx]++; });
     broadcast({ t: 'over', loser: this.it, wins: G.wins });
     this.scene.start('GameOver', { loser: this.it });

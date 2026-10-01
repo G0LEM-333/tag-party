@@ -69,6 +69,39 @@ canvas { display: block; margin: 0 !important;
 .step:disabled { opacity: .35; cursor: default; }
 .val { text-align: center; font-size: clamp(24px, 3.2vw, 32px); }
 
+/* ---------- Players slider (map screen): same chunky white outline as the buttons; fill + square thumb ---------- */
+.slidebox { display: grid; grid-template-columns: auto 1fr 2.2ch; align-items: center; gap: 18px; width: min(620px, 100%); }
+.slidebox .lbl { text-align: left; }
+.slidebox .val { text-align: right; }
+.slider { -webkit-appearance: none; appearance: none; width: 100%; height: 48px; margin: 0; background: transparent; cursor: pointer; --pct: 0%; }
+.slider:focus-visible { outline: none; }
+.slider::-webkit-slider-runnable-track { box-sizing: border-box; height: 18px; border: 4px solid #fff; border-radius: 0;
+  background: linear-gradient(#fff, #fff) 0 0 / var(--pct) 100% no-repeat; }
+.slider::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 30px; height: 44px; margin-top: -13px;
+  border: 4px solid #fff; border-radius: 0; background: var(--sky); }
+.slider::-moz-range-track { box-sizing: border-box; height: 18px; border: 4px solid #fff; border-radius: 0; background: transparent; }
+.slider::-moz-range-progress { height: 10px; background: #fff; border-radius: 0; }
+.slider::-moz-range-thumb { box-sizing: border-box; width: 30px; height: 44px; border: 4px solid #fff; border-radius: 0; background: var(--sky); }
+.slider:hover::-webkit-slider-thumb, .slider:focus-visible::-webkit-slider-thumb { background: #fff; }
+.slider:hover::-moz-range-thumb, .slider:focus-visible::-moz-range-thumb { background: #fff; }
+
+/* ---------- Colour picker (map screen for the host, lobby for everyone): a square outlined button per colour, showing that colour's character ---------- */
+.colorbox { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.cname { font-weight: 400; margin-left: .3em; }
+.swatches { display: grid; grid-template-columns: repeat(12, auto); gap: 10px; justify-content: center; }
+.swatch { position: relative; width: clamp(44px, 5vw, 60px); aspect-ratio: 1; padding: 0; display: grid; place-items: center;
+  background: transparent; border: 4px solid #fff; border-radius: 0; cursor: pointer; }
+.swatch svg { display: block; width: 74%; height: 74%; overflow: visible; }
+.swatch:hover:not(:disabled), .swatch:focus-visible, .swatch.on { background: #fff; outline: none; }
+.swatch.on { box-shadow: 0 0 0 4px var(--sky), 0 0 0 8px #fff; }          /* the one you have: filled + double outline */
+.swatch:active:not(:disabled) { transform: translateY(3px); }
+.swatch:disabled { cursor: default; }                                       /* taken by another player: faded and crossed out */
+.swatch:disabled svg { opacity: .3; }
+.swatch:disabled::after { content: ''; position: absolute; left: 3px; right: 3px; top: calc(50% - 2px); height: 4px; background: #fff; transform: rotate(-45deg); }
+@media (max-width: 860px) { .swatches { grid-template-columns: repeat(6, auto); } .swatch { width: clamp(44px, 11vw, 60px); } }
+/* these two screens can be taller than a short window: start at the top and scroll instead of cutting the top off */
+#scrMap, #scrLobby { justify-content: center; justify-content: safe center; }
+
 /* ---------- Join + lobby ---------- */
 .codebox input { width: min(78vw, 330px); text-align: center; text-transform: uppercase; letter-spacing: .3em; padding: .45em .3em .45em .6em;
   font-size: clamp(40px, 7vw, 64px); cursor: text; }
@@ -87,3 +120,17 @@ canvas { display: block; margin: 0 !important;
 }
 @media (prefers-reduced-motion: reduce) { .island { transition: none; } }
 .btn:disabled { opacity: .4; cursor: default; background: transparent; color: #fff; }
+
+/* The map screen now also holds the players slider and the colour picker: on windows shorter than ~800px the islands and gaps shrink a little so it still fits without scrolling. */
+@media (max-height: 800px) {
+  #scrMap { gap: clamp(10px, 2.8vh, 22px); }
+  #scrMap .title { font-size: clamp(36px, 8vh, 64px); }
+  #scrMap .island svg { width: clamp(110px, min(17vw, 25vh), 220px); }
+  #scrMap .island .cap { margin-top: 2px; font-size: clamp(18px, 2.2vw, 26px); }
+}
+/* short landscape windows (phones on their side): keep all 12 colours on one row */
+@media (max-height: 520px) {
+  .swatches { grid-template-columns: repeat(12, auto); gap: 8px; }
+  .swatch { width: clamp(34px, 5.2vw, 44px); }
+  .colorbox { gap: 8px; }
+}

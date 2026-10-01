@@ -158,6 +158,15 @@
         <span class="cap">UNDERWATER</span>
       </button>
     </div>
+    <div class="slidebox">
+      <label class="lbl" for="capSlider">PLAYERS</label>
+      <input type="range" class="slider" id="capSlider" min="2" max="12" step="1" value="4" aria-label="Number of players">
+      <span class="val" id="vCap" aria-live="polite">4</span>
+    </div>
+    <div class="colorbox">
+      <p class="lbl">YOUR COLOR <b class="cname" id="hostColorName">RED</b></p>
+      <div class="swatches" id="hostColors" role="group" aria-label="Pick your color"></div>
+    </div>
     <button class="btn" id="settingsBtn">GAME SETTINGS</button>
     <p class="note" id="mapNote"></p>
     <button class="back" data-back="scrMode" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
@@ -203,6 +212,10 @@
     <p class="note" id="lobInfo"></p>
     <button class="btn" id="startBtn" hidden data-focus>START ROUND</button>
     <p class="note" id="lobNote" role="status"></p>
+    <div class="colorbox">
+      <p class="lbl">PICK YOUR COLOR <b class="cname" id="lobColorName">RED</b></p>
+      <div class="swatches" id="lobColors" role="group" aria-label="Pick your color"></div>
+    </div>
     <button class="back" data-back="leave" aria-label="Leave room"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 4 3 12l8 8v-5h10V9H11z" fill="currentColor"/></svg></button>
   </section>
 

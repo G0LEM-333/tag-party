@@ -144,7 +144,10 @@ const STALE_MS = 400;        // a player's direct packets older than this -> fal
 // Shared game state (survives scene changes). power = index into POWER_RATES, map = key of MAPS, mode = index into MODES.
 // remote[slot] = latest position packet of every other player (host and guests alike). rid = round id, so a late packet from the last round is ignored.
 const G = { peer: null, isHost: false, slot: 0, maxP: 4, cap: 4, round: 60, power: 2, map: 'meadow', mode: 0, rid: 0, snapAt: 0,
-            conns: {}, remote: {}, wins: Array(12).fill(0), snap: null, hostConn: null };
+            conns: {}, remote: {}, wins: Array(12).fill(0), snap: null, hostConn: null,
+            colors: { 0: 0 }, hostColor: 0 };   // colors[slot] = the colour (index into COLORS / NAMES) that player picked; the host's pick is remembered in hostColor
+// A player's colour is chosen in the lobby (host: on the map screen or in the lobby), one of each. Textures 'p0'..'p11' are keyed by colour, not by slot.
+const colorOf = slot => { const c = G.colors[slot]; return c >= 0 && c < COLORS.length ? c : slot % COLORS.length; };
 
 // The active map's data lives in these globals (set by setMap) so physics, art and networking all read the same thing.
 let PLATS, PADS, RAMPS, CRATES, SPOTS;
@@ -175,8 +178,9 @@ function onPos(m) {
 
 /** Messages a guest receives from the host. */
 function onHostMsg(m) {
-  if (m.t === 'welcome') G.slot = m.slot;
-  else if (m.t === 'start') { setMap(m.map); G.mode = m.mode | 0; G.rid = m.rid; G.remote = {}; G.maxP = m.maxP; G.round = m.round; G.wins = m.wins;
+  if (m.t === 'welcome') { G.slot = m.slot; if (m.colors) { G.colors = m.colors; paintColors(); } }
+  else if (m.t === 'lobby') { G.colors = m.colors; paintColors(); }                          // someone picked / left: the host's list of who has which colour
+  else if (m.t === 'start') { setMap(m.map); G.mode = m.mode | 0; G.rid = m.rid; G.remote = {}; G.maxP = m.maxP; G.round = m.round; G.wins = m.wins; G.colors = m.colors || G.colors;
     document.getElementById('menu').classList.add('gone'); activeScene().scene.start('Play'); }
   else if (m.t === 's') { G.snap = m; G.snapAt = performance.now(); }
   else if (m.t === 'over') { G.wins = m.wins; activeScene().scene.start('GameOver', { it: m.it, lost: m.lost, win: m.win, tie: m.tie, left: m.left, bx: m.bx, by: m.by }); }
@@ -867,10 +871,12 @@ class MenuScene extends Phaser.Scene {
 function startRound() {
   const slots = Object.keys(G.conns).map(Number).sort((a, b) => a - b);
   if (!slots.length) return;                                   // no bots: need at least one other player
-  const old = G.conns; G.conns = {}; G.remote = {}; G.rid++;                      // new round id: stale packets from the last round are ignored
-  slots.forEach((o, k) => { G.conns[k + 1] = old[o]; old[o].slot = k + 1; send(old[o], { t: 'welcome', slot: k + 1 }); });   // close any gap left by someone who left the lobby
+  const old = G.conns, oc = G.colors, ow = G.wins; G.conns = {}; G.remote = {}; G.rid++;                      // new round id: stale packets from the last round are ignored
+  G.colors = { 0: oc[0] }; G.wins = Array(12).fill(0); G.wins[0] = ow[0] | 0;                                  // colours and wins follow the player when slots are compacted
+  slots.forEach((o, k) => { G.conns[k + 1] = old[o]; old[o].slot = k + 1; G.colors[k + 1] = oc[o]; G.wins[k + 1] = ow[o] | 0;
+    send(old[o], { t: 'welcome', slot: k + 1 }); });   // close any gap left by someone who left the lobby
   G.maxP = slots.length + 1;
-  broadcast({ t: 'start', map: G.map, mode: G.mode, rid: G.rid, maxP: G.maxP, round: G.round, wins: G.wins });
+  broadcast({ t: 'start', map: G.map, mode: G.mode, rid: G.rid, maxP: G.maxP, round: G.round, wins: G.wins, colors: G.colors });
   document.getElementById('menu').classList.add('gone');
   activeScene().scene.start('Play');
 }
@@ -888,7 +894,8 @@ function show(id) {
 }
 
 function paintSettings() {
-  $('vPlayers').textContent = G.cap; $('vTime').textContent = G.round + 's'; $('vPower').textContent = POWER_NAMES[G.power];
+  $('vPlayers').textContent = $('vCap').textContent = $('capSlider').value = G.cap; $('capSlider').style.setProperty('--pct', (G.cap - 2) / 10 * 100 + '%');
+  $('vTime').textContent = G.round + 's'; $('vPower').textContent = POWER_NAMES[G.power];
   $('mapNote').textContent = 'Mode: ' + MODE().name;
   const at = { players: [G.cap, 2, 12], time: [TIMES.indexOf(G.round), 0, TIMES.length - 1], power: [G.power, 0, POWER_NAMES.length - 1] };
   document.querySelectorAll('.step').forEach(b => { const [v, lo, hi] = at[b.dataset.set]; b.disabled = +b.dataset.d < 0 ? v <= lo : v >= hi; });
@@ -898,6 +905,46 @@ function stepSetting(k, d) {
   else if (k === 'time') G.round = TIMES[clamp(TIMES.indexOf(G.round) + d, 0, TIMES.length - 1)];
   else G.power = clamp(G.power + d, 0, POWER_NAMES.length - 1);
   paintSettings();
+}
+
+/* ---- Colour picking: 12 colours, one player each. The host (slot 0) keeps the list, guests ask, and the host's answer is sent to everyone. ---- */
+const catSvg = c => { const h = '#' + c.toString(16).padStart(6, '0');                   // the same little cat as the in-game texture, in that colour
+  return `<svg viewBox="0 0 36 36" aria-hidden="true" focusable="false"><path d="M4 12 6 0 14 10ZM32 12 30 0 22 10Z" fill="#1c2b38"/><rect x="2" y="8" width="32" height="28" rx="9" fill="#1c2b38"/>` +
+    `<rect x="2" y="13" width="32" height="6" fill="${h}"/><rect x="0" y="14" width="4" height="4" fill="${h}"/><circle cx="12" cy="25" r="4.5" fill="#fff"/><circle cx="24" cy="25" r="4.5" fill="#fff"/>` +
+    `<circle cx="13" cy="25" r="2"/><circle cx="25" cy="25" r="2"/></svg>`; };
+const niceName = i => NAMES[i][0] + NAMES[i].slice(1).toLowerCase();
+const isGuest = () => !!(G.hostConn && G.hostConn.open);                                   // (a join that failed leaves a closed hostConn behind, so check .open)
+const mySlot = () => isGuest() ? G.slot : 0;                                               // the host (and the host on the map screen) is slot 0
+const takenByOthers = (c, me) => Object.keys(G.colors).some(s => +s !== me && G.colors[s] === c);
+const freeColor = () => { const i = COLORS.findIndex((_, k) => !takenByOthers(k, -1)); return i < 0 ? 0 : i; };   // first colour nobody has
+
+function paintColors() {
+  const me = mySlot(), mine = colorOf(me);
+  document.querySelectorAll('.swatches .swatch').forEach(b => {
+    const i = +b.dataset.c, taken = i !== mine && takenByOthers(i, me), on = i === mine;
+    b.disabled = taken; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+    b.setAttribute('aria-label', niceName(i) + (taken ? ' (taken)' : '')); b.title = niceName(i) + (taken ? ' (taken)' : ''); });
+  $('hostColorName').textContent = $('lobColorName').textContent = NAMES[mine];
+}
+function buildColors() {
+  document.querySelectorAll('.swatches').forEach(box => { box.innerHTML = '';
+    COLORS.forEach((c, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'swatch'; b.dataset.c = i; b.innerHTML = catSvg(c);
+      b.onclick = () => pickColor(i); box.appendChild(b); }); });
+  paintColors();
+}
+/** I clicked a colour. */
+function pickColor(i) {
+  const me = mySlot(); if (takenByOthers(i, me)) return;
+  G.colors[me] = i;
+  if (isGuest()) send(G.hostConn, { t: 'color', c: i });                                  // guest: ask the host (it has the last word, see guestColor)
+  else { G.hostColor = i; if (G.isHost) broadcast({ t: 'lobby', colors: G.colors }); }    // host: just take it and tell everyone
+  paintColors();
+}
+/** Host: a guest asked for a colour. Granted only if nobody else has it. Everyone gets the result either way, so a guest who lost a race snaps back. */
+function guestColor(conn, c) {
+  if ($('menu').classList.contains('gone') || G.conns[conn.slot] !== conn) return;         // colours are locked once a round has started
+  c = c | 0; if (c >= 0 && c < COLORS.length && !takenByOthers(c, conn.slot)) G.colors[conn.slot] = c;
+  broadcast({ t: 'lobby', colors: G.colors }); paintColors();
 }
 
 const paintLobby = () => {
@@ -910,13 +957,13 @@ const say = msg => { ($('scrJoin').hidden ? $('lobNote') : $('joinMsg')).textCon
 function leaveRoom() {
   G.leaving = true;
   try { G.peer && G.peer.destroy(); } catch (e) {}
-  G.peer = G.hostConn = null; G.conns = {}; G.remote = {}; G.isHost = false;
-  show('scrHome');
+  G.peer = G.hostConn = null; G.conns = {}; G.remote = {}; G.isHost = false; G.colors = { 0: G.hostColor };
+  paintColors(); show('scrHome');
 }
 
 /** Host: open a room for the chosen map with the current settings. */
 function hostRoom(mapId) {
-  setMap(mapId); G.maxP = G.cap; G.isHost = true; G.slot = 0; G.conns = {}; G.remote = {}; G.rid = 0;
+  setMap(mapId); G.maxP = G.cap; G.isHost = true; G.slot = 0; G.conns = {}; G.remote = {}; G.rid = 0; G.colors = { 0: G.hostColor }; paintColors();
   const code = Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.random() * 24 | 0]).join('');
   $('lobCode').textContent = code; $('lobPlayers').hidden = false; $('startBtn').hidden = true; paintLobby();
   $('lobInfo').textContent = `${MODE().name} on the ${MAPS[mapId].name} map, ${G.round}s rounds, power-ups ${POWER_NAMES[G.power].toLowerCase()}`;
@@ -930,8 +977,12 @@ function hostRoom(mapId) {
     if (used >= G.cap) return conn.close();
     let slot = 1; while (G.conns[slot]) slot++;
     G.conns[slot] = conn; conn.slot = slot;                      // conn.slot can change when slots are compacted at the start
-    conn.on('open', () => { send(conn, { t: 'welcome', slot: conn.slot }); paintLobby(); });
-    conn.on('close', () => { if (G.conns[conn.slot] === conn) { delete G.conns[conn.slot]; delete G.remote[conn.slot]; } paintLobby(); });   // (positions + E presses arrive as 'pos' packets, see onPos)
+    G.colors[slot] = freeColor();                                // starts with the first colour nobody has; they can change it in the lobby
+    conn.on('open', () => { send(conn, { t: 'welcome', slot: conn.slot, colors: G.colors }); broadcast({ t: 'lobby', colors: G.colors }); paintLobby(); paintColors(); });
+    conn.on('data', m => { if (m && m.t === 'color') guestColor(conn, m.c); });
+    conn.on('close', () => { if (G.conns[conn.slot] === conn) { delete G.conns[conn.slot]; delete G.remote[conn.slot];
+      if (!$('menu').classList.contains('gone')) { delete G.colors[conn.slot]; broadcast({ t: 'lobby', colors: G.colors }); } }   // mid-round the colour stays (the results screen still shows who left)
+      paintLobby(); paintColors(); });   // (positions + E presses arrive as 'pos' packets, see onPos)
   });
 }
 
@@ -978,6 +1029,8 @@ function initUI() {
   document.querySelectorAll('.island[data-map]').forEach(b => { b.onclick = () => hostRoom(b.dataset.map); });
   $('settingsBtn').onclick = () => { paintSettings(); show('scrSettings'); };
   document.querySelectorAll('.step').forEach(b => { b.onclick = () => stepSetting(b.dataset.set, +b.dataset.d); });
+  $('capSlider').oninput = e => { G.cap = clamp(+e.target.value, 2, 12); paintSettings(); };      // players slider on the map screen
+  buildColors();
   document.querySelectorAll('.back').forEach(b => { b.onclick = () => (b.dataset.back === 'leave' ? leaveRoom() : show(b.dataset.back)); });
   $('startBtn').onclick = startRound;
   const code = $('codeIn'), go = () => code.value.length === 4 ? joinRoom(code.value) : ($('joinMsg').textContent = 'Enter the 4-letter room code.');
@@ -1032,7 +1085,7 @@ class PlayScene extends Phaser.Scene {
       // Only MY player gets a physics body (I move myself). Everyone else is a plain sprite that mirrors shared positions.
       // NB: body settings are applied AFTER group.create, which would otherwise reset them.
       const mine = i === G.slot;
-      const p = (mine ? this.group.create(x, 650, 'p' + i) : this.add.sprite(x, 650, 'p' + i)).setDepth(5);
+      const p = (mine ? this.group.create(x, 650, 'p' + colorOf(i)) : this.add.sprite(x, 650, 'p' + colorOf(i))).setDepth(5);
       p.idx = i; p.pj = false; p.hold = 0;
       p.power = 0; p.ec = 0; p.pfx = 0; p.speedUntil = p.shieldUntil = p.invisUntil = p.frozenUntil = p.dashUntil = p.castUntil = p.busyUntil = 0;
       p.coyote = -1e9; p.buffer = -1e9; p.jumpT = -1e9; p.dropUntil = 0;
@@ -1060,7 +1113,7 @@ class PlayScene extends Phaser.Scene {
     // HUD
     const hud = [];
     this.timerTxt = this.add.text(W / 2, 40, '', this.font(64)).setOrigin(.5).setDepth(10); hud.push(this.timerTxt);
-    this.score = COLORS.slice(0, G.maxP).map((c, i) => {
+    this.score = Array.from({ length: G.maxP }, (_, i) => COLORS[colorOf(i)]).map((c, i) => {
       hud.push(this.add.circle(30 + i * 62, 30, 11, c).setStrokeStyle(3, 0x1c2b38).setDepth(10));
       const t = this.add.text(48 + i * 62, 30, '', this.font(20)).setOrigin(0, .5).setDepth(10); hud.push(t); return t; });
 
@@ -1467,14 +1520,14 @@ class GameOverScene extends Phaser.Scene {
     const TONE = { win: [0x3fcf7a, 0x21a366, 0x9bf0bf], lose: [0xff5a4d, 0xc2362c, 0xffa59c], draw: [0xffc83a, 0xc8901a, 0xffe49a] }[verdict];   // [face, shade, highlight]
     if (bomb) this.explode(d.bx, d.by);
 
-    const hexOf = i => '#' + COLORS[i].toString(16).padStart(6, '0');
+    const hexOf = i => '#' + COLORS[colorOf(i)].toString(16).padStart(6, '0');
     const txt = (x, y, str, size, o = {}) => {
       const st = { fontFamily: FONT, fontSize: size + 'px', color: '#fff', shadow: { offsetY: Math.max(2, size / 12 | 0), color: 'rgba(38,34,120,.5)', blur: 0, fill: true }, ...o };
       if (o.noShadow) delete st.shadow; delete st.noShadow;
       return this.add.text(x, y, str, st).setOrigin(.5); };
 
     // Why the round ended this way (one plain sentence)
-    const names = i => NAMES[i][0] + NAMES[i].slice(1).toLowerCase();
+    const names = i => niceName(colorOf(i));
     const others = lost.length - 1;
     const why = !bomb ? `${names(it)} kept the flag until time ran out.`
       : tie ? (n === 2 ? 'Both players were inside the blast.' : 'Nobody was outside the blast.')
@@ -1510,12 +1563,12 @@ class GameOverScene extends Phaser.Scene {
       const chip = gone ? 0x6b7a88 : tie ? 0xffc83a : win.includes(i) ? 0x3fcf7a : 0xff5a4d;
       const t = this.add.container(x, cy);
       t.add(this.add.rectangle(0, 0, w, th, INK, .42).setStrokeStyle(mine ? 5 : 3, mine ? 0xffffff : INK));
-      const cat = this.add.image(0, -50, 'p' + i).setScale(scale);
+      const cat = this.add.image(0, -50, 'p' + colorOf(i)).setScale(scale);
       if (lost.includes(i) && !tie || gone) cat.setTint(0x8a96a3);                                    // the ones who lost look washed out
       t.add(cat);
       if (bomb && lost.includes(i) && !gone) t.add(this.add.graphics().lineStyle(7, 0xff3d2e).lineBetween(-16, -66, 16, -34).lineBetween(16, -66, -16, -34));   // red X on everyone who blew up
       if (!bomb && won) t.add(this.add.image(0, -110, 'flag').setScale(.55));                            // the flag sits above the winner
-      t.add(txt(0, 20, NAMES[i], fs + 4, { color: hexOf(i), stroke: '#1a2b3a', strokeThickness: 4, noShadow: true }));
+      t.add(txt(0, 20, NAMES[colorOf(i)], fs + 4, { color: hexOf(i), stroke: '#1a2b3a', strokeThickness: 4, noShadow: true }));
       t.add(this.add.rectangle(0, 62, w - 12, 34, chip).setStrokeStyle(3, INK));
       t.add(txt(0, 62, status, fs - 2, { color: '#1c2b38', noShadow: true }));
       t.add(txt(0, 108, (G.wins[i] === 1 ? '1 win' : G.wins[i] + ' wins'), fs, {}));

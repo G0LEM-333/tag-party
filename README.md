@@ -55,3 +55,20 @@ Now:
 All the knobs are the constants under "Netcode tuning" at the top of `src/game.js`.
 
 **You must restart / redeploy server.js** together with the new front-end: the new client talks to the new server ops, and an old server would not relay positions at all.
+
+## Seamless ramps (no more breaks in the platforms)
+Ramps used to be drawn as a rotated rectangle, so where one met a platform its end was a slanted cut and the platform's rounded corner left a wedge-shaped hole (visible on WINTER, DESERT and UNDERWATER; the ramps on MEADOW were fine).
+Now a ramp is drawn as a slab with the same vertical thickness as the platforms (`rampBand`, `SLAB` in `src/game.js`), ramps are drawn *before* the platforms so the joint is covered, and `platCorners(i)` squares off the platform's rounded corner on any side a ramp attaches to.
+It is all worked out from the map's `plats` / `ramps` data, so **new maps and new ramps join up automatically** (a ramp end within `JOIN` px of a platform edge counts as attached). Only the art changed; ramp collision (`rampY`) is untouched.
+MEADOW's first ramp deliberately ends in mid-air above the floor, so its end is still a free end.
+
+## Windows that are not in front (hidden, minimised, behind another app)
+**Before:** the browser stops sending animation frames to a hidden window, and Phaser also paused / slowed its own clock whenever the window lost focus. So the player froze for everybody else (no position packets), a *host* who tabbed away froze the whole round (tags, power-ups, timer), and the clocks of different players drifted apart.
+**Now** (`keepRunning` near the bottom of `src/game.js`, plus `src/ticker.js`):
+- Phaser's hidden / visible / blur / focus handlers are switched off. (It still lets go of the keys on blur, so an away player simply stands still and can be tagged.)
+- A tiny **Web Worker** (`src/ticker.js`) ticks ~60 times a second even when the page is hidden. Whenever no frame has been drawn for `STALL_MS` (100 ms) the page runs a normal game step *without drawing*: physics, rules and position packets all keep going. When frames are flowing the ticker does nothing, so there is no double-stepping.
+- The **host's round timer is wall-clock**: the round ends at a fixed real time (`endAt`) instead of being counted down frame by frame, so a slow or background host can no longer stretch the round.
+- Guests anchor their countdown to the **least-delayed host snapshot** (`G.endEst`) instead of re-anchoring on every snapshot, so the timer no longer jitters with network lag and agrees between players.
+- Fallback: if the browser/Discord blocks Web Workers, a plain `setInterval` is used instead (it still helps, but browsers slow those down to ~1 per second in a hidden window).
+
+No change to `server.js`. Rebuild and redeploy the front-end as usual (`npm run build`; the worker is emitted as a small `assets/ticker-*.js`).

@@ -140,11 +140,14 @@ const SNAP_BEAT = 6;         // host: rules snapshot every N frames when nothing
 const REMOTE_SMOOTH = 20;    // how softly other players are eased onto their latest position. Lower = snappier but twitchier (the old value was 45, applied twice).
 const EXTRAP_X = 70, EXTRAP_Y = 30;   // how far ahead (ms) a late packet may be predicted from the sender's velocity. Y is short so landings don't sink into the floor.
 const STALE_MS = 400;        // a player's direct packets older than this -> fall back to the host snapshot
+const TICK_MS = 16;          // background ticker (see keepRunning): how often the worker nudges the page...
+const STALL_MS = 100;        // ...and how long the page may go without drawing a frame before the ticker steps the game itself
+let headless = false;        // true while the ticker is running a step (update + network only, nothing is drawn)
 
 // Shared game state (survives scene changes). power = index into POWER_RATES, map = key of MAPS, mode = index into MODES.
 // remote[slot] = latest position packet of every other player (host and guests alike). rid = round id, so a late packet from the last round is ignored.
 const G = { peer: null, isHost: false, slot: 0, maxP: 4, cap: 4, round: 60, power: 2, map: 'meadow', mode: 0, rid: 0, snapAt: 0,
-            conns: {}, remote: {}, wins: Array(12).fill(0), snap: null, hostConn: null,
+            conns: {}, remote: {}, wins: Array(12).fill(0), snap: null, endEst: Infinity, hostConn: null,
             colors: { 0: 0 }, hostColor: 0 };   // colors[slot] = the colour (index into COLORS / NAMES) that player picked; the host's pick is remembered in hostColor
 // A player's colour is chosen in the lobby (host: on the map screen or in the lobby), one of each. Textures 'p0'..'p11' are keyed by colour, not by slot.
 const colorOf = slot => { const c = G.colors[slot]; return c >= 0 && c < COLORS.length ? c : slot % COLORS.length; };
@@ -180,9 +183,13 @@ function onPos(m) {
 function onHostMsg(m) {
   if (m.t === 'welcome') { G.slot = m.slot; if (m.colors) { G.colors = m.colors; paintColors(); } }
   else if (m.t === 'lobby') { G.colors = m.colors; paintColors(); }                          // someone picked / left: the host's list of who has which colour
-  else if (m.t === 'start') { setMap(m.map); G.mode = m.mode | 0; G.rid = m.rid; G.remote = {}; G.maxP = m.maxP; G.round = m.round; G.wins = m.wins; G.colors = m.colors || G.colors;
+  else if (m.t === 'start') { setMap(m.map); G.mode = m.mode | 0; G.rid = m.rid; G.remote = {}; G.endEst = Infinity; G.maxP = m.maxP; G.round = m.round; G.wins = m.wins; G.colors = m.colors || G.colors;
     document.getElementById('menu').classList.add('gone'); activeScene().scene.start('Play'); }
-  else if (m.t === 's') { G.snap = m; G.snapAt = performance.now(); }
+  else if (m.t === 's') {
+    G.snap = m; G.snapAt = performance.now();
+    // Where (on MY clock) does the host's timer hit zero? A snapshot can only arrive late, never early, so the earliest answer I have seen this
+    // round is the most accurate one. Anchoring to every snapshot instead made the countdown jitter by the network jitter, and let it differ between players.
+    G.endEst = Math.min(G.endEst, G.snapAt + m.time * 1000); }
   else if (m.t === 'over') { G.wins = m.wins; activeScene().scene.start('GameOver', { it: m.it, lost: m.lost, win: m.win, tie: m.tie, left: m.left, bx: m.bx, by: m.by }); }
 }
 
@@ -371,8 +378,8 @@ function bakeLevel(s) {
   items.forEach(([kind, px, y, k, lc, tc]) => S[kind] ? S[kind](px, y, k, lc, tc) : P[kind](g, px, y));   // scenery first, so platforms overlap their feet
   if (M.scenery) M.scenery(g);                                     // hand-placed props (snowmen, candy canes)
 
+  RAMPS.forEach(R => M.drawRamp(g, R));                            // ramps first: platforms are drawn over them, so the joints have no seam
   M.drawPlats(g, rnd);
-  RAMPS.forEach(R => M.drawRamp(g, R));
   M.drawExtras(g, rnd);
   g.generateTexture('levelTex_' + G.map, W, H); g.destroy();       // bake: rendered once, then reused as one image
 }
@@ -390,16 +397,37 @@ function drawPads(g, base = 0xffa000, top = 0xffcc4d) {
       .fillStyle(0xffffff, .9).fillTriangle(x - 9, 674, x + 9, 674, x, 664); });
 }
 
+/* ---- Ramp / platform joints ----
+ * A ramp is drawn as a slab with the same VERTICAL thickness as the platforms (SLAB), so where it meets a platform its end is a vertical
+ * cut that lines up exactly with that platform's edge instead of a slanted cut that leaves a wedge-shaped hole. The platform's rounded
+ * bottom corner is squared off on any side a ramp attaches to. Both are worked out from PLATS / RAMPS, so every map (and any map you add)
+ * joins up seamlessly with no per-map tweaking. Ramps are drawn BEFORE the platforms (see bakeLevel), so a ramp that lands on top of a
+ * platform, or starts on the floor, just disappears into it. */
+const SLAB = 16, JOIN = 3;       // slab thickness (same as every platform), and how close (px) a ramp end must be to a platform edge to count as attached
+/** Corner radii for platform i: rounded underneath, except on a side where a ramp is attached (there the corner must be square). */
+function platCorners(i) {
+  const [x, y, w] = PLATS[i]; let bl = 7, br = 7;
+  RAMPS.forEach(R => [[R.x1, R.y1], [R.x2, R.y2]].forEach(([ex, ey]) => {
+    if (Math.abs(ey - y) > JOIN) return;                       // not level with this platform's top
+    if (Math.abs(ex - x) <= JOIN) bl = 0;                      // ramp meets the left end
+    if (Math.abs(ex - (x + w)) <= JOIN) br = 0; }));           // ramp meets the right end
+  return { tl: 0, tr: 0, bl, br };
+}
+/** One stripe of a ramp, from `a` to `b` px below its top surface (measured straight down, like the stripes on the platforms). */
+function rampBand(g, R, a, b, col) {
+  g.fillStyle(col).fillPoints([{ x: R.x1, y: R.y1 + a }, { x: R.x2, y: R.y2 + a }, { x: R.x2, y: R.y2 + b }, { x: R.x1, y: R.y1 + b }], true, true);
+}
+
 /* ---- Meadow art: pink ground, wavy grass, hanging vines, crates ---- */
 function platsMeadow(g, rnd) {
   const FLOOR = PLATS.length - 1;
   // ---- Platforms (with soft shadow, dark underside, pebbles, wavy grass, hanging vines) ----
   PLATS.forEach(([x, y, w], i) => {
-    const fl = i === FLOOR, th = fl ? H - y : 16;
+    const fl = i === FLOOR, th = fl ? H - y : 16, rb = platCorners(i);
     if (!fl) g.fillStyle(0x1a4fa0, .12).fillRoundedRect(x + 6, y + 14, w - 12, 10, 5);
     if (fl) g.fillStyle(PINK).fillRect(x, y, w, th);
-    else g.fillStyle(PINK).fillRoundedRect(x, y, w, th, { tl: 0, tr: 0, bl: 7, br: 7 })
-           .fillStyle(0xe6306f).fillRoundedRect(x, y + th - 5, w, 5, { tl: 0, tr: 0, bl: 7, br: 7 });
+    else g.fillStyle(PINK).fillRoundedRect(x, y, w, th, rb)
+           .fillStyle(0xe6306f).fillRoundedRect(x, y + th - 5, w, 5, rb);
     g.fillStyle(0xe6306f);
     for (let px = x + 14; px < x + w - 8; px += 26 + rnd() * 14) g.fillCircle(px, y + (fl ? 14 + rnd() * 10 : 10), 2.2);
     g.fillStyle(GREEN).fillRect(x, y, w, 3);
@@ -413,11 +441,8 @@ function platsMeadow(g, rnd) {
     }
   });
 }
-function rampMeadow(g, R) {
-  const ang = Math.atan2(R.y2 - R.y1, R.x2 - R.x1), len = Math.hypot(R.x2 - R.x1, R.y2 - R.y1);
-  g.save(); g.translateCanvas(R.x1, R.y1); g.rotateCanvas(ang);
-  g.fillStyle(PINK).fillRect(0, 0, len, 14).fillStyle(0xe6306f).fillRect(0, 10, len, 4).fillStyle(GREEN).fillRect(0, 0, len, 5);
-  g.restore();
+function rampMeadow(g, R) {                                          // pink slab, darker underside, grass on top (same stripes as the platforms)
+  rampBand(g, R, 0, SLAB, PINK); rampBand(g, R, SLAB - 5, SLAB, 0xe6306f); rampBand(g, R, 0, 5, GREEN);
 }
 function extrasMeadow(g) {
   // ---- Crates: wooden boxes with planks, a framed X-brace, bevelled edges and nails ----
@@ -446,9 +471,9 @@ function extrasMeadow(g) {
 const ICE = { top: 0xe9f0ff, frost: 0xb8d0ff, body: 0xa3a9ff, under: 0x878de8, wire: 0x7c82c8 };
 
 function platsSnow(g, rnd) {
-  const FLOOR = PLATS.length - 1, rb = { tl: 0, tr: 0, bl: 7, br: 7 };
+  const FLOOR = PLATS.length - 1;
   PLATS.forEach(([x, y, w], i) => {
-    const fl = i === FLOOR, th = fl ? H - y : 16;
+    const fl = i === FLOOR, th = fl ? H - y : 16, rb = platCorners(i);
     if (!fl) g.fillStyle(0x6f78d8, .1).fillRoundedRect(x + 6, y + 16, w - 12, 9, 4);                 // soft shadow
     g.fillStyle(ICE.body).fillRoundedRect(x, y, w, th, fl ? 0 : rb);
     g.fillStyle(ICE.under).fillRoundedRect(x, y + th - (fl ? 10 : 5), w, fl ? 10 : 5, fl ? 0 : rb);   // darker underside
@@ -461,11 +486,7 @@ function platsSnow(g, rnd) {
   });
 }
 function rampSnow(g, R) {
-  const ang = Math.atan2(R.y2 - R.y1, R.x2 - R.x1), len = Math.hypot(R.x2 - R.x1, R.y2 - R.y1);
-  g.save(); g.translateCanvas(R.x1, R.y1); g.rotateCanvas(ang);
-  g.fillStyle(ICE.body).fillRect(0, 0, len, 16).fillStyle(ICE.under).fillRect(0, 11, len, 5)
-    .fillStyle(ICE.frost).fillRect(0, 0, len, 5).fillStyle(ICE.top).fillRect(0, 0, len, 2);
-  g.restore();
+  rampBand(g, R, 0, SLAB, ICE.body); rampBand(g, R, SLAB - 5, SLAB, ICE.under); rampBand(g, R, 0, 5, ICE.frost); rampBand(g, R, 0, 2, ICE.top);
 }
 
 /** Sagging wire from A to B with hanging bulbs. */
@@ -583,9 +604,9 @@ function makeCacti(g, P) {
 }
 
 function platsDesert(g, rnd) {
-  const FLOOR = PLATS.length - 1, rb = { tl: 0, tr: 0, bl: 7, br: 7 };
+  const FLOOR = PLATS.length - 1;
   PLATS.forEach(([x, y, w], i) => {
-    const fl = i === FLOOR, th = fl ? H - y : 16;
+    const fl = i === FLOOR, th = fl ? H - y : 16, rb = platCorners(i);
     if (!fl) g.fillStyle(0x9a4a22, .12).fillRoundedRect(x + 6, y + 16, w - 12, 9, 4);                  // soft shadow
     g.fillStyle(SAND.body).fillRoundedRect(x, y, w, th, fl ? 0 : rb);
     g.fillStyle(SAND.under).fillRoundedRect(x, y + th - (fl ? 10 : 5), w, fl ? 10 : 5, fl ? 0 : rb);   // darker underside
@@ -598,11 +619,7 @@ function platsDesert(g, rnd) {
   });
 }
 function rampDesert(g, R) {
-  const ang = Math.atan2(R.y2 - R.y1, R.x2 - R.x1), len = Math.hypot(R.x2 - R.x1, R.y2 - R.y1);
-  g.save(); g.translateCanvas(R.x1, R.y1); g.rotateCanvas(ang);
-  g.fillStyle(SAND.body).fillRect(0, 0, len, 16).fillStyle(SAND.under).fillRect(0, 11, len, 5)
-    .fillStyle(SAND.top).fillRect(0, 0, len, 5).fillStyle(SAND.hi).fillRect(0, 0, len, 2);
-  g.restore();
+  rampBand(g, R, 0, SLAB, SAND.body); rampBand(g, R, SLAB - 5, SLAB, SAND.under); rampBand(g, R, 0, 5, SAND.top); rampBand(g, R, 0, 2, SAND.hi);
 }
 
 /** Sagging rope from A to B with hanging pennants. */
@@ -706,9 +723,9 @@ function makeReef(g, P) {
 }
 
 function platsUnderwater(g, rnd) {
-  const FLOOR = PLATS.length - 1, rb = { tl: 0, tr: 0, bl: 7, br: 7 };
+  const FLOOR = PLATS.length - 1;
   PLATS.forEach(([x, y, w], i) => {
-    const fl = i === FLOOR, th = fl ? H - y : 16;
+    const fl = i === FLOOR, th = fl ? H - y : 16, rb = platCorners(i);
     if (!fl) g.fillStyle(0x0d4a85, .13).fillRoundedRect(x + 6, y + 16, w - 12, 9, 4);                 // soft shadow
     g.fillStyle(CORAL.body).fillRoundedRect(x, y, w, th, fl ? 0 : rb);
     g.fillStyle(CORAL.under).fillRoundedRect(x, y + th - (fl ? 10 : 5), w, fl ? 10 : 5, fl ? 0 : rb);   // darker underside
@@ -721,11 +738,7 @@ function platsUnderwater(g, rnd) {
   });
 }
 function rampUnderwater(g, R) {
-  const ang = Math.atan2(R.y2 - R.y1, R.x2 - R.x1), len = Math.hypot(R.x2 - R.x1, R.y2 - R.y1);
-  g.save(); g.translateCanvas(R.x1, R.y1); g.rotateCanvas(ang);
-  g.fillStyle(CORAL.body).fillRect(0, 0, len, 16).fillStyle(CORAL.under).fillRect(0, 11, len, 5)
-    .fillStyle(CORAL.top).fillRect(0, 0, len, 5).fillStyle(CORAL.hi).fillRect(0, 0, len, 2);
-  g.restore();
+  rampBand(g, R, 0, SLAB, CORAL.body); rampBand(g, R, SLAB - 5, SLAB, CORAL.under); rampBand(g, R, 0, 5, CORAL.top); rampBand(g, R, 0, 2, CORAL.hi);
 }
 
 function starfish(g, x, y, r, col) {
@@ -1007,7 +1020,10 @@ function setPause(on) {
   G.paused = on; $('pause').hidden = !on;
   const sc = activeScene(), solo = !Object.keys(G.conns).length && G.isHost && sc && sc.scene.key === 'Play';
   $('pauseNote').textContent = solo || !on ? '' : 'The game keeps running while you are in this menu.';
-  if (sc && solo) on ? sc.scene.pause() : sc.scene.resume();
+  if (sc && solo) {
+    if (on) { sc.pausedAt = performance.now(); sc.scene.pause(); }
+    else { if (sc.pausedAt) sc.endAt += performance.now() - sc.pausedAt; sc.pausedAt = 0; sc.scene.resume(); }   // the paused time doesn't count against the round
+  }
   if (on) $('resumeBtn').focus();
 }
 /** Leave the game for the title screen (guests are dropped back to theirs when the host leaves). */
@@ -1055,6 +1071,7 @@ class PlayScene extends Phaser.Scene {
   create() {
     drawBg(this); drawLevel(this);
     this.host = G.isHost; if (!this.host) G.snap = null; this.sinceSnap = 0; this.timeLeft = G.round;   // (G.remote is cleared when the round starts, see startRound / onHostMsg)
+    this.endAt = performance.now() + G.round * 1000; this.pausedAt = 0;   // host: the round ends at this REAL time (not counted down frame by frame, so a slow or background window can't stretch it)
     this.M = MODE(); this.roleKey = ''; this.vk = 0; this.timerCol = '#fff';
     this.it = Phaser.Math.Between(0, G.maxP - 1); this.cdUntil = 0; this.over = false;
     this.pu = []; this.puId = 0; this.spawnAt = this.time.now + POWER_RATES[G.power].first; this.pus = {}; this.sp = []; this.su = [];   // orbs (host), orb sprites, per-player [power, fx]
@@ -1312,12 +1329,12 @@ class PlayScene extends Phaser.Scene {
       this.tagCheck();
       this.pickups(now);
       this.sp = this.pl.map(p => [p.power, this.fx(p, now)]); this.su = this.pu.map(u => [u.id, u.type, u.x, u.y]);
-      this.timeLeft -= dt / 1000;
+      this.timeLeft = (this.endAt - t0) / 1000;
       this.pushRules(time);
       if (this.timeLeft <= 0) return this.endRound();
     } else {
       // 2) Guest: everyone else's position comes straight from their own packets; the host snapshot only carries the rules (and a fallback position).
-      const n = G.snap; if (n) { this.it = n.it; this.timeLeft = n.time - (t0 - G.snapAt) / 1000; this.cd = n.cd;      // timer keeps counting between snapshots
+      const n = G.snap; if (n) { this.it = n.it; this.timeLeft = Number.isFinite(G.endEst) ? (G.endEst - t0) / 1000 : n.time - (t0 - G.snapAt) / 1000; this.cd = n.cd;      // timer keeps counting between snapshots
         this.sp = n.p.map(q => [q[3], q[4]]); this.su = n.u || [];
         if (!this.sp[G.slot] || !this.sp[G.slot][0]) this.pwSpent = false;
         me.netFrozen = !!(n.p[G.slot] && (n.p[G.slot][4] & FX.FROZEN));               // the one thing the host can do TO me: freeze
@@ -1327,7 +1344,7 @@ class PlayScene extends Phaser.Scene {
         if (s && t0 - s.at < STALE_MS) this.followRemote(p, s, t0, dt);
         else { const q = n && n.p[i]; if (q) { this.follow(p, q[0], q[1], dt); p.setFlipX(!!q[2]); } } });          // no fresh packets (just joined / left): use the host's copy
     }
-    this.visuals(time);
+    if (!headless) this.visuals(time);                  // (HUD, markers, orbs: only needed when a frame is actually drawn)
   }
 
   /** Updates IT indicator, cooldown flashing, and HUD (both host and guests). */
@@ -1596,6 +1613,38 @@ class GameOverScene extends Phaser.Scene {
   }
 }
 
+/* ---------------- Keep running when the window is not in front ----------------
+ * A hidden tab / minimised window gets NO animation frames from the browser, and Phaser also clamps every time step while the window is unfocused
+ * (and for ~2 s after it comes back). So a player who tabbed away froze in place for everybody else; a host who did it froze the whole round
+ * (tags, timer, power-ups); and clocks drifted apart. Now:
+ *   1. Phaser's own hidden / visible / blur / focus handlers are switched off (it still releases the keys on blur, so an away player simply stands
+ *      still, where others can tag them).
+ *   2. A ticker in a Web Worker (src/ticker.js) steps the game whenever no frame has been drawn for STALL_MS. Those steps run everything
+ *      (physics, rules, sending positions) but draw nothing. When frames come back the ticker goes quiet again by itself.
+ * It reacts to "no frames", not to visibility events, so it also covers occluded windows, throttled iframes, and so on. */
+function keepRunning(game) {
+  const E = Phaser.Core.Events, P = Phaser.Game.prototype;
+  let lastFrame = performance.now(), armed = false, timer = 0;
+  game.events.on(E.PRE_STEP, () => { if (!headless) lastFrame = performance.now(); });            // a real frame was drawn
+
+  const tick = () => {
+    const loop = game.loop; if (!loop.started) return;                                              // Phaser is still starting up
+    if (!armed) {                                                                                    // first tick after Phaser started (its handlers exist by now)
+      armed = true;
+      game.events.off(E.HIDDEN, P.onHidden, game).off(E.VISIBLE, P.onVisible, game).off(E.BLUR, P.onBlur, game).off(E.FOCUS, P.onFocus, game);
+      const draw = loop.callback;
+      loop.callback = (time, delta) => headless ? game.headlessStep(time, delta) : draw(time, delta);   // a ticker step updates but does not draw
+    }
+    const now = performance.now();
+    if (now - lastFrame < STALL_MS) return;                                                          // frames are arriving normally
+    if (now - loop.lastTime < TICK_MS / 2) return;                                                   // ticks that queued up while the page was busy arrive in a burst; stepping on each would pass ~0 ms
+    headless = true; try { loop.tick(); } finally { headless = false; }
+  };
+  const plainTimer = () => { if (!timer) timer = setInterval(tick, TICK_MS); };                      // fallback if workers are blocked: slower when hidden, but better than nothing
+  try { const w = new Worker(new URL('./ticker.js', import.meta.url)); w.onmessage = tick; w.onerror = plainTimer; }
+  catch (e) { plainTimer(); }
+}
+
 /* ---------------- Boot ---------------- */
 if (document.fonts) document.fonts.load('32px "Lilita One"').catch(() => {});   // make sure canvas text can use the UI font
 const game = new Phaser.Game({
@@ -1604,3 +1653,4 @@ const game = new Phaser.Game({
   physics: { default: 'arcade', arcade: { gravity: { y: 1500 }, debug: false } },
   scene: [MenuScene, PlayScene, GameOverScene]
 });
+keepRunning(game);
